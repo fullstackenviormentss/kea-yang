@@ -882,18 +882,38 @@ configureDhcp6Server(Dhcpv6Srv&, isc::data::ConstElementPtr config_set) {
         //     "socket-type": "unix",
         //     "socket-name": "/tmp/kea6.sock"
         // }
+
+        // Get new socket configuration.
         ConstElementPtr sock_cfg =
             CfgMgr::instance().getStagingCfg()->getControlSocketInfo();
 
-        // Close existing socket (if any).
-        isc::config::CommandMgr::instance().closeCommandSocket();
-        if (sock_cfg) {
-            // This will create a control socket and will install external socket
-            // in IfaceMgr. That socket will be monitored when Dhcp4Srv::receivePacket()
-            // calls IfaceMgr::receive4() and callback in CommandMgr will be called,
-            // if necessary. If there were previously open command socket, it will
-            // be closed.
-            isc::config::CommandMgr::instance().openCommandSocket(sock_cfg);
+        // Get current socket configuration.
+        ConstElementPtr current_sock_cfg =
+            CfgMgr::instance().getCurrentCfg()->getControlSocketInfo();
+
+        // Determine if the socket configuration has changed. It has if
+        // both old and new configuration is specified but respective
+        // data elements are't equal.
+        bool sock_changed = (sock_cfg && current_sock_cfg &&
+                             !sock_cfg->equals(*current_sock_cfg));
+
+        // If previous or new socket configuration doesn't exist or
+        // new configuration differs from the old configuration we
+        // have to reopen the socket. Otherwise, we leave the
+        // socket open, so as we can continue to communicate with
+        // a control API client, e.g. to respond with the configuration
+        // status.
+        if (!sock_cfg || !current_sock_cfg || sock_changed) {
+            // Close existing socket (if any).
+            isc::config::CommandMgr::instance().closeCommandSocket();
+            if (sock_cfg) {
+                // This will create a control socket and will install external socket
+                // in IfaceMgr. That socket will be monitored when Dhcp4Srv::receivePacket()
+                // calls IfaceMgr::receive4() and callback in CommandMgr will be called,
+                // if necessary. If there were previously open command socket, it will
+                // be closed.
+                isc::config::CommandMgr::instance().openCommandSocket(sock_cfg);
+            }
         }
 
         // The lease database parser is the last to be run.

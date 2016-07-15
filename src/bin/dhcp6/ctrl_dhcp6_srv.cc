@@ -111,7 +111,6 @@ ControlledDhcpv6Srv::commandSetConfigHandler(const string&,
     if (!args) {
         message = "Arguments for the set-config command are missing.";
     } else {
-
         if (args->getType() != Element::map) {
             message = "Arguments are supposed to be a map.";
         } else {
