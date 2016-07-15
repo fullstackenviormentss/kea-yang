@@ -111,7 +111,7 @@ ControlledDhcpv6Srv::commandSetConfigHandler(const string&,
     if (!args) {
         message = "Missing mandatory 'Dhcp6' parameter.";
     } else {
-        ConstElementPtr dhcp6 = args->get("Dhcp6");
+        dhcp6 = args->get("Dhcp6");
         if (!dhcp6) {
             message = "Missing mandatory 'Dhcp6' parameter.";
         } else if (dhcp6->getType() != Element::map) {
