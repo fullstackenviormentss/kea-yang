@@ -1,4 +1,4 @@
-// Copyright (C) 2014-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2014-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -23,7 +23,7 @@ namespace test {
 
 Dhcp4Client::Configuration::Configuration()
     : routers_(), dns_servers_(), log_servers_(), quotes_servers_(),
-      serverid_("0.0.0.0") {
+      serverid_("0.0.0.0"), siaddr_(asiolink::IOAddress::IPV4_ZERO_ADDRESS()) {
     reset();
 }
 
@@ -34,6 +34,9 @@ Dhcp4Client::Configuration::reset() {
     log_servers_.clear();
     quotes_servers_.clear();
     serverid_ = asiolink::IOAddress("0.0.0.0");
+    siaddr_ = asiolink::IOAddress::IPV4_ZERO_ADDRESS();
+    sname_.clear();
+    boot_file_name_.clear();
     lease_ = Lease4();
 }
 
@@ -178,6 +181,17 @@ Dhcp4Client::applyConfiguration() {
     if (opt_vendor) {
         config_.vendor_suboptions_ = opt_vendor->getOptions();
     }
+    // siaddr
+    config_.siaddr_ = resp->getSiaddr();
+    // sname
+    OptionBuffer buf = resp->getSname();
+    // sname is a fixed length field holding null terminated string. Use
+    // of c_str() guarantees that only a useful portion (ending with null
+    // character) is assigned.
+    config_.sname_.assign(std::string(buf.begin(), buf.end()).c_str());
+    // (boot)file
+    buf = resp->getFile();
+    config_.boot_file_name_.assign(std::string(buf.begin(), buf.end()).c_str());
     // Server Identifier
     OptionCustomPtr opt_serverid = boost::dynamic_pointer_cast<
         OptionCustom>(resp->getOption(DHO_DHCP_SERVER_IDENTIFIER));
@@ -286,6 +300,9 @@ Dhcp4Client::doInform(const bool set_ciaddr) {
 
 void
 Dhcp4Client::doRelease() {
+    // There is no response for Release message.
+    context_.response_.reset();
+
     if (config_.lease_.addr_.isV4Zero()) {
         isc_throw(Dhcp4ClientError, "failed to send the release"
                   " message because client doesn't have a lease");
@@ -321,7 +338,7 @@ Dhcp4Client::doDecline() {
     // Include client identifier.
     appendClientId();
 
-    // Incluer server identifier.
+    // Include server identifier.
     appendServerId();
 
     // Remove configuration.
@@ -382,6 +399,15 @@ Dhcp4Client::doRequest() {
     // Send the message to the server.
     sendMsg(context_.query_);
     // Expect response.
+    context_.response_ = receiveOneMsg();
+    // If the server has responded, store the configuration received.
+    if (context_.response_) {
+        applyConfiguration();
+    }
+}
+
+void
+Dhcp4Client::receiveResponse() {
     context_.response_ = receiveOneMsg();
     // If the server has responded, store the configuration received.
     if (context_.response_) {
@@ -467,6 +493,8 @@ Dhcp4Client::receiveOneMsg() {
                               msg->getBuffer().getLength()));
     msg_copy->setRemoteAddr(msg->getLocalAddr());
     msg_copy->setLocalAddr(msg->getRemoteAddr());
+    msg_copy->setRemotePort(msg->getLocalPort());
+    msg_copy->setLocalPort(msg->getRemotePort());
     msg_copy->setIface(msg->getIface());
 
     msg_copy->unpack();
@@ -500,7 +528,14 @@ Dhcp4Client::sendMsg(const Pkt4Ptr& msg) {
     msg_copy->setLocalAddr(dest_addr_);
     msg_copy->setIface(iface_name_);
     srv_->fakeReceive(msg_copy);
-    srv_->run();
+
+    try {
+        // Invoke run_one instead of run, because we want to avoid triggering
+        // IO service.
+        srv_->run_one();
+    } catch (...) {
+        // Suppress errors, as the DHCPv4 server does.
+    }
 }
 
 void

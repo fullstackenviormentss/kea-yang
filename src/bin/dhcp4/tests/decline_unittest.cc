@@ -1,4 +1,4 @@
-// Copyright (C) 2014-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2014-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -89,7 +89,7 @@ Dhcpv4SrvTest::acquireAndDecline(Dhcp4Client& client,
     isc::stats::StatsMgr::instance().setValue("declined-addresses",
                                               static_cast<int64_t>(0));
 
-    // Ok, do the normal lease aquisition.
+    // Ok, do the normal lease acquisition.
     CfgMgr::instance().clear();
 
     // Configure DHCP server.
@@ -149,7 +149,7 @@ Dhcpv4SrvTest::acquireAndDecline(Dhcp4Client& client,
     if (expected_result == SHOULD_PASS) {
         EXPECT_EQ(Lease::STATE_DECLINED, lease->state_);
 
-        // The decline succeded, so the declined-addresses statistic should
+        // The decline succeeded, so the declined-addresses statistic should
         // be increased by one
         EXPECT_EQ(after, before + 1);
 
@@ -280,7 +280,7 @@ TEST_F(DeclineTest, declineNonMatchingIPAddress) {
 
     // Modify the client's address to force it to decline a different address
     // than it has obtained from the server.
-    client.config_.lease_.addr_ = IOAddress(static_cast<uint32_t>(leased_address) + 1);
+    client.config_.lease_.addr_ = IOAddress(leased_address.toUint32() + 1);
 
     // Send DHCPDECLINE and make sure it was unsuccessful, i.e. the lease
     // remains in the database.

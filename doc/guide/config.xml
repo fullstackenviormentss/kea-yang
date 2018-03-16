@@ -1,32 +1,66 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE book PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
-"http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd" [
-<!ENTITY mdash  "&#x2014;" >
-]>
-<chapter id="kea-config">
-  <title>Kea configuration</title>
+<!--
+ - Copyright (C) 2014-2018 Internet Systems Consortium, Inc. ("ISC")
+ -
+ - This Source Code Form is subject to the terms of the Mozilla Public
+ - License, v. 2.0. If a copy of the MPL was not distributed with this
+ - file, You can obtain one at http://mozilla.org/MPL/2.0/.
+-->
 
-  <para>Kea is designed to allow different methods by which it can be
-    configured, each method being implemented by a component known as a
-    configuration backend.  At present, only one such backend is
-    available, that allowing configuration by means of a JSON file.</para>
+<!-- Converted by db4-upgrade version 1.1 -->
+<chapter xmlns="http://docbook.org/ns/docbook" version="5.0" xml:id="kea-config">
+  <title>Kea Configuration</title>
 
-  <section id="json-backend">
-    <title>JSON configuration backend</title>
-    <para>JSON is the default configuration backend.
-    It assumes that the servers are started from the command line
+  <para>Kea is using JSON structures to handle configuration. Previously
+  we there was a concept of other configuration backends, but that never was
+  implemented and the idea was abandoned.</para>
+
+  <section xml:id="json">
+    <title>JSON Configuration</title>
+    <para>JSON is notation used throughout the Kea project. The most obvious
+    usage is for configuration file, but it is also used for sending commands
+    over Management API (see <xref linkend="ctrl-channel"/>) and for
+    communicating between DHCP servers and DDNS update daemon.</para>
+
+    <para>Typical usage assumes that the servers are started from the command line
     (either directly or using a script, e.g. <filename>keactrl</filename>).
     The JSON backend uses certain signals to influence Kea. The
     configuration file is specified upon startup using the -c parameter.</para>
 
-    <section id="json-format">
-      <title>JSON syntax</title>
+    <section xml:id="json-format">
+      <title>JSON Syntax</title>
       <para>Configuration files for DHCPv4, DHCPv6 and DDNS modules are defined
-      in an extended JSON format. Basic JSON is defined in <ulink
-      url="http://tools.ietf.org/html/rfc4627">RFC 4627</ulink>.  Kea components
-      use a slightly modified JSON, in that they allow shell-style
-      comments in the file: lines with the hash (#) character in the first column
-      are comment lines and are ignored.</para>
+      in an extended JSON format. Basic JSON is defined in <link xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://tools.ietf.org/html/rfc7159">RFC 7159</link>. Note that Kea
+      1.2 introduces a new parser that is better at following the JSON spec.  In
+      particular, the only values allowed for boolean are true or false (all
+      lowercase). The capitalized versions (True or False) are not accepted.
+      </para>
+
+      <para>Kea components use an extended JSON with additional features
+      allowed:
+      <itemizedlist>
+        <listitem>
+          <simpara>shell comments: any text after the hash (#)
+          character is ignored. Both Dhcp4 and Dhcp6 allow # in any column,
+          while Ddns requires hash to be in the first column.</simpara>
+        </listitem>
+        <listitem>
+          <simpara>C comments: any text after the double slashes (//)
+          character is ignored. Both Dhcp4 and Dhcp6 supports this
+          feature.</simpara>
+        </listitem>
+        <listitem>
+          <simpara>Multiline comments: any text between /* and */ is
+          ignored. This commenting can span multiple lines. Both Dhcp4 and
+          Dhcp6 supports this feature.</simpara>
+        </listitem>
+        <listitem>
+          <simpara>File inclusion: JSON files can include other JSON
+          files. This can be done by using &lt;?include
+          "file.json"?&gt;. Both Dhcp4 and Dhcp6 supports this
+          feature.</simpara>
+        </listitem>
+      </itemizedlist>
+      </para>
 
       <para>The configuration file consists of a single object (often colloquially
       called a map) started with a curly bracket. It comprises the "Dhcp4", "Dhcp6",
@@ -38,8 +72,8 @@
       Logging object to configure logging parameters; it will ignore the Dhcp6
       object.</para>
 
-      <para>For example, a very simple configuration for both DHCPv4 and DHCPv6
-      could look like this:
+      <para>A very simple configuration for both DHCPv4 and
+      DHCPv6 could look like this:
 <screen>
 # The whole configuration starts here.
 {
@@ -56,8 +90,7 @@
     "subnet4": [{
        "pools": [ { "pool": "192.0.2.1-192.0.2.200" } ],
        "subnet": "192.0.2.0/24"
-    }],
-    ...
+    }]
 },
 # DHCPv4 specific configuration ends here.
 
@@ -73,8 +106,7 @@
     "subnet6": [{
        "pools": [ { "pool": "2001:db8::/80" } ],
        "subnet": "2001:db8::/64"
-    }],
-    ...
+    }]
 },
 # DHCPv6 specific configuration ends here.
 
@@ -84,15 +116,14 @@
    "loggers": [{
         "name": "*",
         "severity": "DEBUG"
-    }],
-    ...
+    }]
 }
 # Logger parameters end here.
 
 # The whole configuration structure ends here.
 }
 </screen>
-	</para>
+        </para>
 
         <para>More examples are available in the installed
         <filename>share/doc/kea/examples</filename> directory.</para>
@@ -103,7 +134,7 @@
         DHCPv6, only subnet6 parameters will be mentioned. It is implied that
         the remaining elements (the global map that holds Dhcp6, Logging and possibly
         DhcpDdns) are present, but they are omitted for clarity. Usually, locations
-        where extra parameters may appear are denoted with an ellipsis.</para>
+        where extra parameters may appear are denoted by an ellipsis.</para>
     </section>
 
     <section>
@@ -116,7 +147,7 @@
         valid-lifetime in the Dhcp6 component can be referred to as
         Dhcp6/valid-lifetime and the pool in the first subnet defined in the DHCPv6
         configuration as Dhcp6/subnet6[0]/pool.</para>
-      
+
       <!-- @todo Add a reference here after #3422 is done -->
     </section>
 

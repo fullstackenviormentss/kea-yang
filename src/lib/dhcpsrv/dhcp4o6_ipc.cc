@@ -71,7 +71,7 @@ int Dhcp4o6IpcBase::open(uint16_t port, EndpointType endpoint_type) {
     }
     // We'll connect to the loopback address so bind to it too.
     local6.sin6_addr.s6_addr[15] = 1;
-    if (bind(sock, (struct sockaddr *)&local6, sizeof(local6)) < 0) {
+    if (::bind(sock, (struct sockaddr *)&local6, sizeof(local6)) < 0) {
         ::close(sock);
         isc_throw(Dhcp4o6IpcError, "Failed to bind DHCP4o6 socket.");
     }
@@ -151,7 +151,7 @@ Pkt6Ptr Dhcp4o6IpcBase::receive() {
             option_vendor.reset();
         }
     }
-         
+
     // Vendor option must exist.
     if (!option_vendor) {
         LOG_WARN(dhcpsrv_logger, DHCPSRV_DHCP4O6_RECEIVED_BAD_PACKET)

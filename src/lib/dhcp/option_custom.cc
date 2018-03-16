@@ -1,4 +1,4 @@
-// Copyright (C) 2012-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2012-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -9,6 +9,8 @@
 #include <dhcp/option_data_types.h>
 #include <dhcp/option_custom.h>
 #include <util/encode/hex.h>
+
+using namespace isc::asiolink;
 
 namespace isc {
 namespace dhcp {
@@ -46,7 +48,7 @@ OptionCustom::clone() const {
 }
 
 void
-OptionCustom::addArrayDataField(const asiolink::IOAddress& address) {
+OptionCustom::addArrayDataField(const IOAddress& address) {
     checkArrayType();
 
     if ((address.isV4() && definition_.getType() != OPT_IPV4_ADDRESS_TYPE) ||
@@ -63,6 +65,26 @@ OptionCustom::addArrayDataField(const asiolink::IOAddress& address) {
 }
 
 void
+OptionCustom::addArrayDataField(const std::string& value) {
+    checkArrayType();
+
+    OpaqueDataTuple::LengthFieldType lft = getUniverse() == Option::V4 ?
+        OpaqueDataTuple::LENGTH_1_BYTE : OpaqueDataTuple::LENGTH_2_BYTES;
+    OptionBuffer buf;
+    OptionDataTypeUtil::writeTuple(value, lft, buf);
+    buffers_.push_back(buf);
+}
+
+void
+OptionCustom::addArrayDataField(const OpaqueDataTuple& value) {
+    checkArrayType();
+
+    OptionBuffer buf;
+    OptionDataTypeUtil::writeTuple(value, buf);
+    buffers_.push_back(buf);
+}
+
+void
 OptionCustom::addArrayDataField(const bool value) {
     checkArrayType();
 
@@ -72,10 +94,69 @@ OptionCustom::addArrayDataField(const bool value) {
 }
 
 void
+OptionCustom::addArrayDataField(const PrefixLen& prefix_len,
+                                const asiolink::IOAddress& prefix) {
+    checkArrayType();
+
+    if (definition_.getType() != OPT_IPV6_PREFIX_TYPE) {
+        isc_throw(BadDataTypeCast, "IPv6 prefix can be specified only for"
+                  " an option comprising an array of IPv6 prefix values");
+    }
+
+    OptionBuffer buf;
+    OptionDataTypeUtil::writePrefix(prefix_len, prefix, buf);
+    buffers_.push_back(buf);
+}
+
+void
+OptionCustom::addArrayDataField(const PSIDLen& psid_len, const PSID& psid) {
+    checkArrayType();
+
+    if (definition_.getType() != OPT_PSID_TYPE) {
+        isc_throw(BadDataTypeCast, "PSID value can be specified onlu for"
+                  " an option comprising an array of PSID length / value"
+                  " tuples");
+    }
+
+    OptionBuffer buf;
+    OptionDataTypeUtil::writePsid(psid_len, psid, buf);
+    buffers_.push_back(buf);
+}
+
+void
 OptionCustom::checkIndex(const uint32_t index) const {
     if (index >= buffers_.size()) {
         isc_throw(isc::OutOfRange, "specified data field index " << index
                   << " is out of range.");
+    }
+}
+
+void
+OptionCustom::createBuffer(OptionBuffer& buffer,
+                           const OptionDataType data_type) const {
+    // For data types that have a fixed size we can use the
+    // utility function to get the buffer's size.
+    size_t data_size = OptionDataTypeUtil::getDataTypeLen(data_type);
+
+    // For variable data sizes the utility function returns zero.
+    // It is ok for string values because the default string
+    // is 'empty'. However for FQDN the empty value is not valid
+    // so we initialize it to '.'. For prefix there is a prefix
+    // length fixed field.
+    if (data_size == 0) {
+        if (data_type == OPT_FQDN_TYPE) {
+            OptionDataTypeUtil::writeFqdn(".", buffer);
+
+        } else if (data_type == OPT_IPV6_PREFIX_TYPE) {
+            OptionDataTypeUtil::writePrefix(PrefixLen(0),
+                                            IOAddress::IPV6_ZERO_ADDRESS(),
+                                            buffer);
+        }
+    } else {
+        // At this point we can resize the buffer. Note that
+        // for string values we are setting the empty buffer
+        // here.
+        buffer.resize(data_size);
     }
 }
 
@@ -102,24 +183,7 @@ OptionCustom::createBuffers() {
         for (OptionDefinition::RecordFieldsConstIter field = fields.begin();
              field != fields.end(); ++field) {
             OptionBuffer buf;
-
-            // For data types that have a fixed size we can use the
-            // utility function to get the buffer's size.
-            size_t data_size = OptionDataTypeUtil::getDataTypeLen(*field);
-
-            // For variable data sizes the utility function returns zero.
-            // It is ok for string values because the default string
-            // is 'empty'. However for FQDN the empty value is not valid
-            // so we initialize it to '.'.
-            if (data_size == 0 &&
-                *field == OPT_FQDN_TYPE) {
-                OptionDataTypeUtil::writeFqdn(".", buf);
-            } else {
-                // At this point we can resize the buffer. Note that
-                // for string values we are setting the empty buffer
-                // here.
-                buf.resize(data_size);
-            }
+            createBuffer(buf, *field);
             // We have the buffer with default value prepared so we
             // add it to the set of buffers.
             buffers.push_back(buf);
@@ -134,15 +198,7 @@ OptionCustom::createBuffers() {
         // For non-arrays we have a single value being held by the option
         // so we have to allocate exactly one buffer.
         OptionBuffer buf;
-        size_t data_size = OptionDataTypeUtil::getDataTypeLen(data_type);
-        if (data_size == 0 &&
-            data_type == OPT_FQDN_TYPE) {
-            OptionDataTypeUtil::writeFqdn(".", buf);
-        } else {
-            // Note that if our option holds a string value then
-            // we are making empty buffer here.
-            buf.resize(data_size);
-        }
+        createBuffer(buf, data_type);
         // Add a buffer that we have created and leave.
         buffers.push_back(buf);
     }
@@ -150,6 +206,73 @@ OptionCustom::createBuffers() {
     // don't touch buffers_ until we successfully allocate all
     // buffers to be stored there.
     std::swap(buffers, buffers_);
+}
+
+size_t
+OptionCustom::bufferLength(const OptionDataType data_type, bool in_array,
+                           OptionBuffer::const_iterator begin,
+                           OptionBuffer::const_iterator end) const {
+    // For fixed-size data type such as boolean, integer, even
+    // IP address we can use the utility function to get the required
+    // buffer size.
+    size_t data_size = OptionDataTypeUtil::getDataTypeLen(data_type);
+
+    // For variable size types (e.g. string) the function above will
+    // return 0 so we need to do a runtime check of the length.
+    if (data_size == 0) {
+        // FQDN is a special data type as it stores variable length data
+        // but the data length is encoded in the buffer. The easiest way
+        // to obtain the length of the data is to read the FQDN. The
+        // utility function will return the size of the buffer on success.
+        if (data_type == OPT_FQDN_TYPE) {
+            std::string fqdn =
+                OptionDataTypeUtil::readFqdn(OptionBuffer(begin, end));
+            // The size of the buffer holding an FQDN is always
+            // 1 byte larger than the size of the string
+            // representation of this FQDN.
+            data_size = fqdn.size() + 1;
+        } else if (!definition_.getArrayType() &&
+                   ((data_type == OPT_BINARY_TYPE) ||
+                    (data_type == OPT_STRING_TYPE))) {
+            // In other case we are dealing with string or binary value
+            // which size can't be determined. Thus we consume the
+            // remaining part of the buffer for it. Note that variable
+            // size data can be laid at the end of the option only and
+            // that the validate() function in OptionDefinition object
+            // should have checked wheter it is a case for this option.
+            data_size = std::distance(begin, end);
+        } else if (data_type == OPT_IPV6_PREFIX_TYPE) {
+            // The size of the IPV6 prefix type is determined as
+            // one byte (which is the size of the prefix in bits)
+            // followed by the prefix bits (right-padded with
+            // zeros to the nearest octet boundary)
+            if ((begin == end) && !in_array)
+                return 0;
+            PrefixTuple prefix =
+                OptionDataTypeUtil::readPrefix(OptionBuffer(begin, end));
+            // Data size comprises 1 byte holding a prefix length and the
+            // prefix length (in bytes) rounded to the nearest byte boundary.
+            data_size = sizeof(uint8_t) + (prefix.first.asUint8() + 7) / 8;
+        } else if (data_type == OPT_TUPLE_TYPE) {
+            OpaqueDataTuple::LengthFieldType lft =
+                getUniverse() == Option::V4 ?
+                OpaqueDataTuple::LENGTH_1_BYTE :
+                OpaqueDataTuple::LENGTH_2_BYTES;
+            std::string value =
+                OptionDataTypeUtil::readTuple(OptionBuffer(begin, end), lft);
+            data_size = value.size();
+            // The size of the buffer holding a tuple is always
+            // 1 or 2 byte larger than the size of the string
+            data_size += getUniverse() == Option::V4 ? 1 : 2;
+        } else {
+            // If we reached the end of buffer we assume that this option is
+            // truncated because there is no remaining data to initialize
+            // an option field.
+            isc_throw(OutOfRange, "option buffer truncated");
+        }
+    }
+
+    return data_size;
 }
 
 void
@@ -172,54 +295,38 @@ OptionCustom::createBuffers(const OptionBuffer& data_buf) {
         // Go over all data fields within a record.
         for (OptionDefinition::RecordFieldsConstIter field = fields.begin();
              field != fields.end(); ++field) {
-            // For fixed-size data type such as boolean, integer, even
-            // IP address we can use the utility function to get the required
-            // buffer size.
-            size_t data_size = OptionDataTypeUtil::getDataTypeLen(*field);
+            size_t data_size = bufferLength(*field, false,
+                                            data, data_buf.end());
 
-            // For variable size types (e.g. string) the function above will
-            // return 0 so we need to do a runtime check of the length.
-            if (data_size == 0) {
-                // FQDN is a special data type as it stores variable length data
-                // but the data length is encoded in the buffer. The easiest way
-                // to obtain the length of the data is to read the FQDN. The
-                // utility function will return the size of the buffer on success.
-                if (*field == OPT_FQDN_TYPE) {
-                    std::string fqdn =
-                        OptionDataTypeUtil::readFqdn(OptionBuffer(data, data_buf.end()));
-                    // The size of the buffer holding an FQDN is always
-                    // 1 byte larger than the size of the string
-                    // representation of this FQDN.
-                    data_size = fqdn.size() + 1;
-                } else if ( (*field == OPT_BINARY_TYPE) || (*field == OPT_STRING_TYPE) ) {
-                    // In other case we are dealing with string or binary value
-                    // which size can't be determined. Thus we consume the
-                    // remaining part of the buffer for it. Note that variable
-                    // size data can be laid at the end of the option only and
-                    // that the validate() function in OptionDefinition object
-                    // should have checked wheter it is a case for this option.
-                    data_size = std::distance(data, data_buf.end());
-                } else {
-                    // If we reached the end of buffer we assume that this option is
-                    // truncated because there is no remaining data to initialize
-                    // an option field.
-                    isc_throw(OutOfRange, "option buffer truncated");
-                }
-            } else {
-                // Our data field requires that there is a certain chunk of
-                // data left in the buffer. If not, option is truncated.
-                if (std::distance(data, data_buf.end()) < data_size) {
-                    isc_throw(OutOfRange, "option buffer truncated");
-                }
+            // Our data field requires that there is a certain chunk of
+            // data left in the buffer. If not, option is truncated.
+            if (std::distance(data, data_buf.end()) < data_size) {
+                isc_throw(OutOfRange, "option buffer truncated");
             }
+
             // Store the created buffer.
             buffers.push_back(OptionBuffer(data, data + data_size));
             // Proceed to the next data field.
             data += data_size;
         }
 
+        // Get extra buffers when the last field is an array.
+        if (definition_.getArrayType()) {
+            while (data != data_buf.end()) {
+                // Code copied from the standard array case
+                size_t data_size = bufferLength(fields.back(), true,
+                                                data, data_buf.end());
+                assert(data_size > 0);
+                if (std::distance(data, data_buf.end()) < data_size) {
+                    break;
+                }
+                buffers.push_back(OptionBuffer(data, data + data_size));
+                data += data_size;
+            }
+        }
+
         // Unpack suboptions if any.
-        if (data != data_buf.end() && !getEncapsulatedSpace().empty()) {
+        else if (data != data_buf.end() && !getEncapsulatedSpace().empty()) {
             unpackOptions(OptionBuffer(data, data_buf.end()));
         }
 
@@ -242,18 +349,7 @@ OptionCustom::createBuffers(const OptionBuffer& data_buf) {
         // we have to handle multiple buffers.
         if (definition_.getArrayType()) {
             while (data != data_buf.end()) {
-                // FQDN is a special case because it is of a variable length.
-                // The actual length for a particular FQDN is encoded within
-                // a buffer so we have to actually read the FQDN from a buffer
-                // to get it.
-                if (data_type == OPT_FQDN_TYPE) {
-                    std::string fqdn =
-                        OptionDataTypeUtil::readFqdn(OptionBuffer(data, data_buf.end()));
-                    // The size of the buffer holding an FQDN is always
-                    // 1 byte larger than the size of the string
-                    // representation of this FQDN.
-                    data_size = fqdn.size() + 1;
-                }
+                data_size = bufferLength(data_type, true, data, data_buf.end());
                 // We don't perform other checks for data types that can't be
                 // used together with array indicator such as strings, empty field
                 // etc. This is because OptionDefinition::validate function should
@@ -275,20 +371,8 @@ OptionCustom::createBuffers(const OptionBuffer& data_buf) {
             // For non-arrays the data_size can be zero because
             // getDataTypeLen returns zero for variable size data types
             // such as strings. Simply take whole buffer.
-            if (data_size == 0) {
-                // For FQDN we get the size by actually reading the FQDN.
-                if (data_type == OPT_FQDN_TYPE) {
-                    std::string fqdn =
-                        OptionDataTypeUtil::readFqdn(OptionBuffer(data, data_buf.end()));
-                    // The size of the buffer holding an FQDN is always
-                    // 1 bytes larger than the size of the string
-                    // representation of this FQDN.
-                    data_size = fqdn.size() + 1;
-                } else {
-                    data_size = std::distance(data, data_buf.end());
-                }
-            }
-            if (data_size > 0) {
+            data_size = bufferLength(data_type, false, data, data_buf.end());
+            if ((data_size > 0) && (std::distance(data, data_buf.end()) >= data_size)) {
                 buffers.push_back(OptionBuffer(data, data + data_size));
                 data += data_size;
             } else {
@@ -300,7 +384,7 @@ OptionCustom::createBuffers(const OptionBuffer& data_buf) {
                 unpackOptions(OptionBuffer(data, data_buf.end()));
             }
         }
-    } else if (data_type == OPT_EMPTY_TYPE) {
+    } else {
         // Unpack suboptions if any.
         if (data != data_buf.end() && !getEncapsulatedSpace().empty()) {
             unpackOptions(OptionBuffer(data, data_buf.end()));
@@ -348,9 +432,17 @@ OptionCustom::dataFieldToText(const OptionDataType data_type,
     case OPT_FQDN_TYPE:
         text << "\"" << readFqdn(index) << "\"";
         break;
+    case OPT_TUPLE_TYPE:
+        text << "\"" << readTuple(index) << "\"";
+        break;
     case OPT_STRING_TYPE:
         text << "\"" << readString(index) << "\"";
         break;
+    case OPT_PSID_TYPE:
+    {
+        PSIDTuple t = readPsid(index);
+        text << "len=" << t.first.asUnsigned() << ",psid=" << t.second.asUint16();
+    }
     default:
         ;
     }
@@ -383,7 +475,7 @@ OptionCustom::pack(isc::util::OutputBuffer& buf) const {
 }
 
 
-asiolink::IOAddress
+IOAddress
 OptionCustom::readAddress(const uint32_t index) const {
     checkIndex(index);
 
@@ -402,10 +494,8 @@ OptionCustom::readAddress(const uint32_t index) const {
 }
 
 void
-OptionCustom::writeAddress(const asiolink::IOAddress& address,
+OptionCustom::writeAddress(const IOAddress& address,
                            const uint32_t index) {
-    using namespace isc::asiolink;
-
     checkIndex(index);
 
     if ((address.isV4() && buffers_[index].size() != V4ADDRESS_LEN) ||
@@ -434,6 +524,39 @@ OptionCustom::writeBinary(const OptionBuffer& buf,
     buffers_[index] = buf;
 }
 
+std::string
+OptionCustom::readTuple(const uint32_t index) const {
+    checkIndex(index);
+    OpaqueDataTuple::LengthFieldType lft = getUniverse() == Option::V4 ?
+        OpaqueDataTuple::LENGTH_1_BYTE : OpaqueDataTuple::LENGTH_2_BYTES;
+    return (OptionDataTypeUtil::readTuple(buffers_[index], lft));
+}
+
+void
+OptionCustom::readTuple(OpaqueDataTuple& tuple,
+                        const uint32_t index) const {
+    checkIndex(index);
+    OptionDataTypeUtil::readTuple(buffers_[index], tuple);
+}
+
+void
+OptionCustom::writeTuple(const std::string& value, const uint32_t index) {
+    checkIndex(index);
+
+    buffers_[index].clear();
+    OpaqueDataTuple::LengthFieldType lft = getUniverse() == Option::V4 ?
+        OpaqueDataTuple::LENGTH_1_BYTE : OpaqueDataTuple::LENGTH_2_BYTES;
+    OptionDataTypeUtil::writeTuple(value, lft, buffers_[index]);
+}
+
+void
+OptionCustom::writeTuple(const OpaqueDataTuple& value, const uint32_t index) {
+    checkIndex(index);
+
+    buffers_[index].clear();
+    OptionDataTypeUtil::writeTuple(value, buffers_[index]);
+}
+
 bool
 OptionCustom::readBoolean(const uint32_t index) const {
     checkIndex(index);
@@ -458,7 +581,7 @@ void
 OptionCustom::writeFqdn(const std::string& fqdn, const uint32_t index) {
     checkIndex(index);
 
-    // Create a temporay buffer where the FQDN will be written.
+    // Create a temporary buffer where the FQDN will be written.
     OptionBuffer buf;
     // Try to write to the temporary buffer rather than to the
     // buffers_ member directly guarantees that we don't modify
@@ -466,10 +589,49 @@ OptionCustom::writeFqdn(const std::string& fqdn, const uint32_t index) {
     // is valid.
     OptionDataTypeUtil::writeFqdn(fqdn, buf);
     // If we got to this point it means that the FQDN is valid.
-    // We can move the contents of the teporary buffer to the
+    // We can move the contents of the temporary buffer to the
     // target buffer.
     std::swap(buffers_[index], buf);
 }
+
+PrefixTuple
+OptionCustom::readPrefix(const uint32_t index) const {
+    checkIndex(index);
+    return (OptionDataTypeUtil::readPrefix(buffers_[index]));
+}
+
+void
+OptionCustom::writePrefix(const PrefixLen& prefix_len,
+                          const IOAddress& prefix,
+                          const uint32_t index) {
+    checkIndex(index);
+
+    OptionBuffer buf;
+    OptionDataTypeUtil::writePrefix(prefix_len, prefix, buf);
+    // If there are no errors while writing PSID to a buffer, we can
+    // replace the current buffer with a new buffer.
+    std::swap(buffers_[index], buf);
+}
+
+
+PSIDTuple
+OptionCustom::readPsid(const uint32_t index) const {
+    checkIndex(index);
+    return (OptionDataTypeUtil::readPsid(buffers_[index]));
+}
+
+void
+OptionCustom::writePsid(const PSIDLen& psid_len, const PSID& psid,
+                        const uint32_t index) {
+    checkIndex(index);
+
+    OptionBuffer buf;
+    OptionDataTypeUtil::writePsid(psid_len, psid, buf);
+    // If there are no errors while writing PSID to a buffer, we can
+    // replace the current buffer with a new buffer.
+    std::swap(buffers_[index], buf);
+}
+
 
 std::string
 OptionCustom::readString(const uint32_t index) const {
@@ -545,6 +707,13 @@ std::string OptionCustom::toText(int indent) const {
              field != fields.end(); ++field) {
             output << " " << dataFieldToText(*field, std::distance(fields.begin(),
                                                                    field));
+        }
+
+        // If the last record field is an array iterate on extra buffers
+        if (definition_.getArrayType()) {
+            for (unsigned int i = fields.size(); i < getDataFieldsNum(); ++i) {
+                output << " " << dataFieldToText(fields.back(), i);
+            }
         }
     } else {
         // For non-record types we iterate over all buffers

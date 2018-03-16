@@ -1,4 +1,4 @@
-# Copyright (C) 2012-2016 Internet Systems Consortium.
+# Copyright (C) 2012-2018 Internet Systems Consortium, Inc. ("ISC")
 #
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -14,7 +14,7 @@
 #
 # mysql -u <user> -p <password> <database> < dhcpdb_create.mysql
 #
-# ... at the command prompt, or log in to the MySQL database and at the "mysql>"
+# ... at the command prompt, or log in to the MySQL database and at the 'mysql>'
 # prompt, issue the command:
 #
 # source dhcpdb_create.mysql
@@ -26,7 +26,7 @@
 # is initialized to 1.0, then upgraded to 2.0 etc. This may be somewhat
 # sub-optimal, but it ensues consistency with upgrade scripts. (It is much
 # easier to maintain init and upgrade scripts if they look the same).
-# Since initialization is done only once, it's perfromance is not an issue.
+# Since initialization is done only once, it's performance is not an issue.
 
 # This line starts database initialization to 1.0.
 
@@ -86,15 +86,15 @@ CREATE TABLE lease6_types (
     ) ENGINE = INNODB;
 
 START TRANSACTION;
-INSERT INTO lease6_types VALUES (0, "IA_NA");   # Non-temporary v6 addresses
-INSERT INTO lease6_types VALUES (1, "IA_TA");   # Temporary v6 addresses
-INSERT INTO lease6_types VALUES (2, "IA_PD");   # Prefix delegations
+INSERT INTO lease6_types VALUES (0, 'IA_NA');   # Non-temporary v6 addresses
+INSERT INTO lease6_types VALUES (1, 'IA_TA');   # Temporary v6 addresses
+INSERT INTO lease6_types VALUES (2, 'IA_PD');   # Prefix delegations
 COMMIT;
 
 # Finally, the version of the schema.  We start at 1.0 during development.
 # This table is only modified during schema upgrades.  For historical reasons
 # (related to the names of the columns in the BIND 10 DNS database file), the
-# first column is called "version" and not "major".
+# first column is called 'version' and not 'major'.
 CREATE TABLE schema_version (
     version INT PRIMARY KEY NOT NULL,       # Major version number
     minor INT                               # Minor version number
@@ -103,7 +103,7 @@ START TRANSACTION;
 INSERT INTO schema_version VALUES (1, 0);
 COMMIT;
 
-# This line concludes database initalization to version 1.0.
+# This line concludes database initialization to version 1.0.
 
 # This line starts database upgrade to version 2.0.
 ALTER TABLE lease6
@@ -126,27 +126,27 @@ CREATE TABLE lease_hwaddr_source (
 ) ENGINE = INNODB;
 
 # Hardware address obtained from raw sockets
-INSERT INTO lease_hwaddr_source VALUES (1, "HWADDR_SOURCE_RAW");
+INSERT INTO lease_hwaddr_source VALUES (1, 'HWADDR_SOURCE_RAW');
 
 # Hardware address converted from IPv6 link-local address with EUI-64
-INSERT INTO lease_hwaddr_source VALUES (2, "HWADDR_SOURCE_IPV6_LINK_LOCAL");
+INSERT INTO lease_hwaddr_source VALUES (2, 'HWADDR_SOURCE_IPV6_LINK_LOCAL');
 
 # Hardware address extracted from client-id (duid)
-INSERT INTO lease_hwaddr_source VALUES (4, "HWADDR_SOURCE_DUID");
+INSERT INTO lease_hwaddr_source VALUES (4, 'HWADDR_SOURCE_DUID');
 
 # Hardware address extracted from client address relay option (RFC6939)
-INSERT INTO lease_hwaddr_source VALUES (8, "HWADDR_SOURCE_CLIENT_ADDR_RELAY_OPTION");
+INSERT INTO lease_hwaddr_source VALUES (8, 'HWADDR_SOURCE_CLIENT_ADDR_RELAY_OPTION');
 
 # Hardware address extracted from remote-id option (RFC4649)
-INSERT INTO lease_hwaddr_source VALUES (16, "HWADDR_SOURCE_REMOTE_ID");
+INSERT INTO lease_hwaddr_source VALUES (16, 'HWADDR_SOURCE_REMOTE_ID');
 
 # Hardware address extracted from subscriber-id option (RFC4580)
-INSERT INTO lease_hwaddr_source VALUES (32, "HWADDR_SOURCE_SUBSCRIBER_ID");
+INSERT INTO lease_hwaddr_source VALUES (32, 'HWADDR_SOURCE_SUBSCRIBER_ID');
 
 # Hardware address extracted from docsis options
-INSERT INTO lease_hwaddr_source VALUES (64, "HWADDR_SOURCE_DOCSIS");
+INSERT INTO lease_hwaddr_source VALUES (64, 'HWADDR_SOURCE_DOCSIS');
 
-UPDATE schema_version SET version="2", minor="0";
+UPDATE schema_version SET version='2', minor='0';
 
 # This line concludes database upgrade to version 2.0.
 
@@ -264,9 +264,9 @@ CREATE TABLE IF NOT EXISTS lease_state (
 ) ENGINE=INNODB;
 
 # Insert currently defined state names.
-INSERT INTO lease_state VALUES (0, "default");
-INSERT INTO lease_state VALUES (1, "declined");
-INSERT INTO lease_state VALUES (2, "expired-reclaimed");
+INSERT INTO lease_state VALUES (0, 'default');
+INSERT INTO lease_state VALUES (1, 'declined');
+INSERT INTO lease_state VALUES (2, 'expired-reclaimed');
 
 # Add a constraint that any state value added to the lease4 must
 # map to a value in the lease_state table.
@@ -382,7 +382,7 @@ SET version = '4', minor = '0';
 
 # In the event hardware address cannot be determined, we need to satisfy
 # foreign key constraint between lease6 and lease_hardware_source
-INSERT INTO lease_hwaddr_source VALUES (0, "HWADDR_SOURCE_UNKNOWN");
+INSERT INTO lease_hwaddr_source VALUES (0, 'HWADDR_SOURCE_UNKNOWN');
 
 # Update the schema version number
 UPDATE schema_version
@@ -402,7 +402,7 @@ DROP INDEX key_dhcp6_identifier_subnet_id ON hosts;
 CREATE UNIQUE INDEX key_dhcp6_identifier_subnet_id ON hosts (dhcp_identifier ASC , dhcp_identifier_type ASC , dhcp6_subnet_id ASC);
 
 # Create index to search for reservations using IP address and subnet id.
-# This unique index guarantees that there is only one occurence of the
+# This unique index guarantees that there is only one occurrence of the
 # particular IPv4 address for a given subnet.
 CREATE UNIQUE INDEX key_dhcp4_ipv4_address_subnet_id ON hosts (ipv4_address ASC , dhcp4_subnet_id ASC);
 
@@ -420,9 +420,9 @@ CREATE TABLE IF NOT EXISTS host_identifier_type (
 ) ENGINE = INNODB;
 
 START TRANSACTION;
-INSERT INTO host_identifier_type VALUES (0, "hw-address"); # Non-temporary v6 addresses
-INSERT INTO host_identifier_type VALUES (1, "duid");       # Temporary v6 addresses
-INSERT INTO host_identifier_type VALUES (2, "circuit-id"); # Prefix delegations
+INSERT INTO host_identifier_type VALUES (0, 'hw-address');
+INSERT INTO host_identifier_type VALUES (1, 'duid');
+INSERT INTO host_identifier_type VALUES (2, 'circuit-id');
 COMMIT;
 
 # Add a constraint that any identifier type value added to the hosts
@@ -447,10 +447,10 @@ CREATE TABLE IF NOT EXISTS dhcp_option_scope (
 ) ENGINE = INNODB;
 
 START TRANSACTION;
-INSERT INTO dhcp_option_scope VALUES (0, "global");
-INSERT INTO dhcp_option_scope VALUES (1, "subnet");
-INSERT INTO dhcp_option_scope VALUES (2, "client-class");
-INSERT INTO dhcp_option_scope VALUES (3, "host");
+INSERT INTO dhcp_option_scope VALUES (0, 'global');
+INSERT INTO dhcp_option_scope VALUES (1, 'subnet');
+INSERT INTO dhcp_option_scope VALUES (2, 'client-class');
+INSERT INTO dhcp_option_scope VALUES (3, 'host');
 COMMIT;
 
 # Add scopes into table holding DHCPv4 options
@@ -465,10 +465,78 @@ ALTER TABLE dhcp6_options
     ADD CONSTRAINT fk_dhcp6_option_scope FOREIGN KEY (scope_id)
     REFERENCES dhcp_option_scope (scope_id);
 
+# Add UNSIGNED to reservation_id
+ALTER TABLE ipv6_reservations
+    MODIFY reservation_id INT UNSIGNED NOT NULL AUTO_INCREMENT;
+
+# Add columns holding reservations for siaddr, sname and file fields
+# carried within DHCPv4 message.
+ALTER TABLE hosts ADD COLUMN dhcp4_next_server INT UNSIGNED NULL;
+ALTER TABLE hosts ADD COLUMN dhcp4_server_hostname VARCHAR(64) NULL;
+ALTER TABLE hosts ADD COLUMN dhcp4_boot_file_name VARCHAR(128) NULL;
+
 # Update the schema version number
 UPDATE schema_version
-SET version = '4', minor = '2';
-# This line concludes database upgrade to version 4.2.
+SET version = '5', minor = '0';
+# This line concludes database upgrade to version 5.0.
+
+# Add missing 'client-id' and new 'flex-id' host identifier types.
+INSERT INTO host_identifier_type VALUES (3, 'client-id');
+INSERT INTO host_identifier_type VALUES (4, 'flex-id');
+
+# Recreate the trigger removing dependent host entries.
+DROP TRIGGER host_BDEL;
+
+DELIMITER $$
+CREATE TRIGGER host_BDEL BEFORE DELETE ON hosts FOR EACH ROW
+-- Edit trigger body code below this line. Do not edit lines above this one
+BEGIN
+DELETE FROM ipv6_reservations WHERE ipv6_reservations.host_id = OLD.host_id;
+DELETE FROM dhcp4_options WHERE dhcp4_options.host_id = OLD.host_id;
+DELETE FROM dhcp6_options WHERE dhcp6_options.host_id = OLD.host_id;
+END
+$$
+DELIMITER ;
+
+# Update the schema version number
+UPDATE schema_version
+SET version = '5', minor = '1';
+# This line concludes database upgrade to version 5.1.
+
+# Make subnet_id column types consistent with lease table columns
+ALTER TABLE dhcp4_options MODIFY dhcp4_subnet_id INT UNSIGNED;
+ALTER TABLE dhcp6_options MODIFY dhcp6_subnet_id INT UNSIGNED;
+
+# Update the schema version number
+UPDATE schema_version
+SET version = '5', minor = '2';
+
+# This line concludes database upgrade to version 5.2.
+
+# Add user context into table holding hosts
+ALTER TABLE hosts ADD COLUMN user_context TEXT NULL;
+
+# Add user contexts into tables holding DHCP options
+ALTER TABLE dhcp4_options ADD COLUMN user_context TEXT NULL;
+ALTER TABLE dhcp6_options ADD COLUMN user_context TEXT NULL;
+
+# Create index for searching leases by subnet identifier.
+CREATE INDEX lease4_by_subnet_id ON lease4 (subnet_id);
+
+# Create for searching leases by subnet identifier and lease type.
+CREATE INDEX lease6_by_subnet_id_lease_type ON lease6 (subnet_id, lease_type);
+
+# The index by iaid_subnet_id_duid is not the best choice because there are
+# cases when we don't specify subnet identifier while searching leases. The
+# index will be universal if the subnet_id is the right most column in the
+# index.
+DROP INDEX lease6_by_iaid_subnet_id_duid on lease6;
+CREATE INDEX lease6_by_duid_iaid_subnet_id ON lease6 (duid, iaid, subnet_id);
+
+# Update the schema version number
+UPDATE schema_version
+SET version = '6', minor = '0';
+# This line concludes database upgrade to version 6.0.
 
 # Notes:
 #
@@ -494,7 +562,7 @@ SET version = '4', minor = '2';
 #
 # Portability
 # ===========
-# The "ENGINE = INNODB" on some tables is not portable to another database
+# The 'ENGINE = INNODB' on some tables is not portable to another database
 # and will need to be removed.
 #
 # Some columns contain binary data so are stored as VARBINARY instead of

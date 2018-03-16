@@ -1,4 +1,4 @@
-// Copyright (C) 2011-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2011-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -30,6 +30,7 @@
 #include <dhcpsrv/utils.h>
 #include <util/buffer.h>
 #include <util/range_utilities.h>
+#include <util/encode/hex.h>
 #include <stats/stats_mgr.h>
 
 #include <dhcp6/tests/dhcp6_test_utils.h>
@@ -74,7 +75,7 @@ const char* CONFIGS[] = {
     "        {"
     "          \"name\": \"subscriber-id\","
     "          \"data\": \"1234\","
-    "          \"csv-format\": False"
+    "          \"csv-format\": false"
     "        } ]"
     " } ],"
     "\"valid-lifetime\": 4000 }",
@@ -98,7 +99,53 @@ const char* CONFIGS[] = {
     "    \"pools\": [ { \"pool\": \"2001:db8:1::/64\" } ],"
     "    \"subnet\": \"2001:db8:1::/48\" "
     " } ],"
-    "\"valid-lifetime\": 4000 }"
+    "\"valid-lifetime\": 4000 }",
+
+    // Configuration 2:
+    // - a single subnet
+    // - two global options (one enforced with always-send)
+    "{"
+    "    \"interfaces-config\": { \"interfaces\": [ \"*\" ] }, "
+    "    \"preferred-lifetime\": 3000, "
+    "    \"rebind-timer\": 2000, "
+    "    \"renew-timer\": 1000, "
+    "    \"valid-lifetime\": 4000, "
+    "    \"subnet6\": [ {"
+    "       \"pools\": [ { \"pool\": \"2001:db8:1::/64\" } ], "
+    "       \"subnet\": \"2001:db8:1::/48\""
+    "    } ], "
+    "    \"option-data\": ["
+    "    {"
+    "        \"name\": \"dns-servers\", "
+    "        \"data\": \"2001:db8:1234:FFFF::1\""
+    "    }, "
+    "    {"
+    "        \"name\": \"subscriber-id\", "
+    "         \"data\": \"1234\", "
+    "         \"always-send\": true"
+    "    }"
+    "    ]"
+    "}",
+
+    // Configuration 3:
+    // - one subnet with one address pool and one prefix pool
+    // - user-contexts defined in subnet and each pool
+    "{"
+    "    \"subnet6\": [ {"
+    "       \"pools\": [ {"
+    "           \"pool\": \"2001:db8:1::/64\","
+    "           \"user-context\": { \"value\": 42 }"
+    "       } ], "
+    "       \"pd-pools\": [ {"
+    "           \"prefix\": \"2001:db8:abcd::\","
+    "           \"prefix-len\": 48,"
+    "           \"delegated-len\": 64,"
+    "           \"user-context\": { \"type\": \"prefixes\" }"
+    "        } ],"
+    "       \"subnet\": \"2001:db8:1::/48\","
+    "       \"user-context\": { \"secure\": false }"
+    "    } ] "
+    "}"
 };
 
 // This test verifies that incoming SOLICIT can be handled properly when
@@ -275,7 +322,7 @@ TEST_F(Dhcpv6SrvTest, DUID) {
     case DUID::DUID_LLT: {
         // DUID must contain at least 6 bytes long MAC
         // + 8 bytes of fixed header
-        EXPECT_GE(14, len);
+        EXPECT_GE(len, 14);
 
         uint16_t hw_type = data.readUint16();
         // there's no real way to find out "correct"
@@ -1186,7 +1233,9 @@ TEST_F(Dhcpv6SrvTest, selectSubnetAddr) {
 
     // The clause for assuming local subnet if there is only one subnet is was
     // removed.
-    EXPECT_FALSE(srv.selectSubnet(pkt));
+    bool drop = false;
+    EXPECT_FALSE(srv.selectSubnet(pkt, drop));
+    EXPECT_FALSE(drop);
 
     // CASE 2: We have only one subnet defined and we received relayed traffic.
     // We should NOT select it.
@@ -1196,8 +1245,9 @@ TEST_F(Dhcpv6SrvTest, selectSubnetAddr) {
     CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->add(subnet1); // just a single subnet
     CfgMgr::instance().commit();
     pkt->setRemoteAddr(IOAddress("2001:db8:abcd::2345"));
-    Subnet6Ptr selected = srv.selectSubnet(pkt);
+    Subnet6Ptr selected = srv.selectSubnet(pkt, drop);
     EXPECT_FALSE(selected);
+    EXPECT_FALSE(drop);
 
     // CASE 3: We have three subnets defined and we received local traffic.
     // Nothing should be selected.
@@ -1207,8 +1257,9 @@ TEST_F(Dhcpv6SrvTest, selectSubnetAddr) {
     CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->add(subnet3);
     CfgMgr::instance().commit();
     pkt->setRemoteAddr(IOAddress("fe80::abcd"));
-    selected = srv.selectSubnet(pkt);
+    selected = srv.selectSubnet(pkt, drop);
     EXPECT_FALSE(selected);
+    EXPECT_FALSE(drop);
 
     // CASE 4: We have three subnets defined and we received relayed traffic
     // that came out of subnet 2. We should select subnet2 then
@@ -1218,8 +1269,9 @@ TEST_F(Dhcpv6SrvTest, selectSubnetAddr) {
     CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->add(subnet3);
     CfgMgr::instance().commit();
     pkt->setRemoteAddr(IOAddress("2001:db8:2::baca"));
-    selected = srv.selectSubnet(pkt);
+    selected = srv.selectSubnet(pkt, drop);
     EXPECT_EQ(selected, subnet2);
+    EXPECT_FALSE(drop);
 
     // CASE 5: We have three subnets defined and we received relayed traffic
     // that came out of undefined subnet. We should select nothing
@@ -1229,7 +1281,8 @@ TEST_F(Dhcpv6SrvTest, selectSubnetAddr) {
     CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->add(subnet3);
     CfgMgr::instance().commit();
     pkt->setRemoteAddr(IOAddress("2001:db8:4::baca"));
-    EXPECT_FALSE(srv.selectSubnet(pkt));
+    EXPECT_FALSE(srv.selectSubnet(pkt, drop));
+    EXPECT_FALSE(drop);
 }
 
 // This test verifies if selectSubnet() selects proper subnet for a given
@@ -1253,8 +1306,10 @@ TEST_F(Dhcpv6SrvTest, selectSubnetIface) {
     Pkt6Ptr pkt = Pkt6Ptr(new Pkt6(DHCPV6_SOLICIT, 1234));
     pkt->setIface("eth0");
 
-    Subnet6Ptr selected = srv.selectSubnet(pkt);
+    bool drop = false;
+    Subnet6Ptr selected = srv.selectSubnet(pkt, drop);
     EXPECT_EQ(selected, subnet1);
+    EXPECT_FALSE(drop);
 
     // CASE 2: We have only one subnet defined and it is available via eth0.
     // Packet came from eth1. We should not select it
@@ -1264,8 +1319,9 @@ TEST_F(Dhcpv6SrvTest, selectSubnetIface) {
 
     pkt->setIface("eth1");
 
-    selected = srv.selectSubnet(pkt);
+    selected = srv.selectSubnet(pkt, drop);
     EXPECT_FALSE(selected);
+    EXPECT_FALSE(drop);
 
     // CASE 3: We have only 3 subnets defined, one over eth0, one remote and
     // one over wifi1.
@@ -1277,13 +1333,16 @@ TEST_F(Dhcpv6SrvTest, selectSubnetIface) {
     CfgMgr::instance().commit();
 
     pkt->setIface("eth0");
-    EXPECT_EQ(subnet1, srv.selectSubnet(pkt));
+    EXPECT_EQ(subnet1, srv.selectSubnet(pkt, drop));
+    EXPECT_FALSE(drop);
 
     pkt->setIface("eth3"); // no such interface
-    EXPECT_EQ(Subnet6Ptr(), srv.selectSubnet(pkt)); // nothing selected
+    EXPECT_EQ(Subnet6Ptr(), srv.selectSubnet(pkt, drop)); // nothing selected
+    EXPECT_FALSE(drop);
 
     pkt->setIface("wifi1");
-    EXPECT_EQ(subnet3, srv.selectSubnet(pkt));
+    EXPECT_EQ(subnet3, srv.selectSubnet(pkt, drop));
+    EXPECT_FALSE(drop);
 }
 
 // This test verifies if selectSubnet() selects proper subnet for a given
@@ -1308,8 +1367,10 @@ TEST_F(Dhcpv6SrvTest, selectSubnetRelayLinkaddr) {
     Pkt6Ptr pkt = Pkt6Ptr(new Pkt6(DHCPV6_SOLICIT, 1234));
     pkt->relay_info_.push_back(relay);
 
-    Subnet6Ptr selected = srv.selectSubnet(pkt);
+    bool drop = false;
+    Subnet6Ptr selected = srv.selectSubnet(pkt, drop);
     EXPECT_FALSE(selected);
+    EXPECT_FALSE(drop);
 
     // CASE 2: We have three subnets defined and we received relayed traffic
     // that came out of subnet 2. We should select subnet2 then
@@ -1318,22 +1379,25 @@ TEST_F(Dhcpv6SrvTest, selectSubnetRelayLinkaddr) {
     CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->add(subnet2);
     CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->add(subnet3);
     CfgMgr::instance().commit();
-    selected = srv.selectSubnet(pkt);
+    selected = srv.selectSubnet(pkt, drop);
     EXPECT_EQ(selected, subnet2);
+    EXPECT_FALSE(drop);
 
     // Source of the packet should have no meaning. Selection is based
     // on linkaddr field in the relay
     pkt->setRemoteAddr(IOAddress("2001:db8:1::baca"));
-    selected = srv.selectSubnet(pkt);
+    selected = srv.selectSubnet(pkt, drop);
     EXPECT_EQ(selected, subnet2);
+    EXPECT_FALSE(drop);
 
     // But not when this linkaddr field is not usable.
     Pkt6::RelayInfo relay2;
     relay2.peeraddr_ = IOAddress("fe80::1");
     pkt->relay_info_.clear();
     pkt->relay_info_.push_back(relay2);
-    selected = srv.selectSubnet(pkt);
+    selected = srv.selectSubnet(pkt, drop);
     EXPECT_EQ(selected, subnet1);
+    EXPECT_FALSE(drop);
 
     // CASE 3: We have three subnets defined and we received relayed traffic
     // that came out a layer 2 relay on subnet 2. We should select subnet2 then
@@ -1346,8 +1410,9 @@ TEST_F(Dhcpv6SrvTest, selectSubnetRelayLinkaddr) {
     pkt->relay_info_.push_back(relay);
     relay2.hop_count_ = 1;
     pkt->relay_info_.push_back(relay2);
-    selected = srv.selectSubnet(pkt);
+    selected = srv.selectSubnet(pkt, drop);
     EXPECT_EQ(selected, subnet2);
+    EXPECT_FALSE(drop);
 
     // The number of level 2 relay doesn't matter
     pkt->relay_info_.clear();
@@ -1368,8 +1433,9 @@ TEST_F(Dhcpv6SrvTest, selectSubnetRelayLinkaddr) {
     relay23.peeraddr_ = IOAddress("fe80::1");
     relay23.hop_count_ = 4;
     pkt->relay_info_.push_back(relay23);
-    selected = srv.selectSubnet(pkt);
+    selected = srv.selectSubnet(pkt, drop);
     EXPECT_EQ(selected, subnet2);
+    EXPECT_FALSE(drop);
 
     // Only the inner/last relay with a usable address matters
     pkt->relay_info_.clear();
@@ -1382,8 +1448,9 @@ TEST_F(Dhcpv6SrvTest, selectSubnetRelayLinkaddr) {
     relay3.peeraddr_ = IOAddress("fe80::1");
     relay3.hop_count_ = 4;
     pkt->relay_info_.push_back(relay3);
-    selected = srv.selectSubnet(pkt);
+    selected = srv.selectSubnet(pkt, drop);
     EXPECT_EQ(selected, subnet3);
+    EXPECT_FALSE(drop);
 
     // CASE 4: We have three subnets defined and we received relayed traffic
     // that came out of undefined subnet. We should select nothing
@@ -1396,9 +1463,9 @@ TEST_F(Dhcpv6SrvTest, selectSubnetRelayLinkaddr) {
     relay.hop_count_ = 0;
     relay.linkaddr_ = IOAddress("2001:db8:4::1234");
     pkt->relay_info_.push_back(relay);
-    selected = srv.selectSubnet(pkt);
+    selected = srv.selectSubnet(pkt, drop);
     EXPECT_FALSE(selected);
-
+    EXPECT_FALSE(drop);
 }
 
 // This test verifies if selectSubnet() selects proper subnet for a given
@@ -1428,16 +1495,19 @@ TEST_F(Dhcpv6SrvTest, selectSubnetRelayInterfaceId) {
     pkt->relay_info_.push_back(relay);
 
     // There is only one subnet configured and we are outside of that subnet
-    Subnet6Ptr selected = srv.selectSubnet(pkt);
+    bool drop = false;
+    Subnet6Ptr selected = srv.selectSubnet(pkt, drop);
     EXPECT_FALSE(selected);
+    EXPECT_FALSE(drop);
 
     // CASE 2: We have only one subnet defined and it is for interface-id "relay2"
     // Packet came with interface-id "relay2". We should select it
     CfgMgr::instance().clear();
     CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->add(subnet2); // just a single subnet
     CfgMgr::instance().commit();
-    selected = srv.selectSubnet(pkt);
+    selected = srv.selectSubnet(pkt, drop);
     EXPECT_EQ(selected, subnet2);
+    EXPECT_FALSE(drop);
 
     // CASE 3: We have only 3 subnets defined: one remote for interface-id "relay1",
     // one remote for interface-id "relay2" and third local
@@ -1448,7 +1518,8 @@ TEST_F(Dhcpv6SrvTest, selectSubnetRelayInterfaceId) {
     CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->add(subnet3);
     CfgMgr::instance().commit();
 
-    EXPECT_EQ(subnet2, srv.selectSubnet(pkt));
+    EXPECT_EQ(subnet2, srv.selectSubnet(pkt, drop));
+    EXPECT_FALSE(drop);
 }
 
 // Checks if server responses are sent to the proper port.
@@ -1499,6 +1570,54 @@ TEST_F(Dhcpv6SrvTest, portsRelayedTraffic) {
 
     // This is sent back to relay, so port is 547
     EXPECT_EQ(DHCP6_SERVER_PORT, adv->getRemotePort());
+}
+
+// Checks effect of persistency (aka always-true) flag on the ORO
+TEST_F(Dhcpv6SrvTest, prlPersistency) {
+    IfaceMgrTestConfig test_config(true);
+
+    ASSERT_NO_THROW(configure(CONFIGS[2]));
+
+    // Create a packet with enough to select the subnet and go through
+    // the SOLICIT processing
+    Pkt6Ptr sol(new Pkt6(DHCPV6_SOLICIT, 1234));
+    sol->setRemoteAddr(IOAddress("fe80::abcd"));
+    sol->setIface("eth0");
+    sol->addOption(generateIA(D6O_IA_NA, 234, 1500, 3000));
+    OptionPtr clientid = generateClientId();
+    sol->addOption(clientid);
+
+    // Create and add an ORO for another option
+    OptionUint16ArrayPtr oro(new OptionUint16Array(Option::V6, D6O_ORO));
+    ASSERT_TRUE(oro);
+    oro->addValue(D6O_SNTP_SERVERS);
+    sol->addOption(oro);
+
+    // Let the server process it and generate a response.
+    Pkt6Ptr response = srv_.processSolicit(sol);
+
+    // The server should add a subscriber-id option
+    ASSERT_TRUE(response->getOption(D6O_SUBSCRIBER_ID));
+    // But no dns-servers
+    ASSERT_FALSE(response->getOption(D6O_NAME_SERVERS));
+    // Nor a sntp-servers
+    ASSERT_FALSE(response->getOption(D6O_SNTP_SERVERS));
+
+    // Reset ORO adding dns-servers
+    sol->delOption(D6O_ORO);
+    oro->addValue(D6O_NAME_SERVERS);
+    sol->addOption(oro);
+
+    // Let the server process it again. This time the name-servers
+    // option should be present.
+    response = srv_.processSolicit(sol);
+
+    // Processing should add a subscriber-id option
+    ASSERT_TRUE(response->getOption(D6O_SUBSCRIBER_ID));
+    // and now a dns-servers
+    ASSERT_TRUE(response->getOption(D6O_NAME_SERVERS));
+    // and still no sntp-servers
+    ASSERT_FALSE(response->getOption(D6O_SNTP_SERVERS));
 }
 
 // Checks if server is able to handle a relayed traffic from DOCSIS3.0 modems
@@ -1665,6 +1784,78 @@ TEST_F(Dhcpv6SrvTest, vendorOptionsORO) {
     EXPECT_EQ("normal_erouter_v6.cm", config_file->getValue());
 }
 
+// This test checks if Option Request Option (ORO) in docsis (vendor-id=4491)
+// vendor options is parsed correctly and the persistent options are actually assigned.
+TEST_F(Dhcpv6SrvTest, vendorPersistentOptions) {
+
+    IfaceMgrTestConfig test_config(true);
+
+    string config = "{ \"interfaces-config\": {"
+        "  \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "    \"option-def\": [ {"
+        "        \"name\": \"config-file\","
+        "        \"code\": 33,"
+        "        \"type\": \"string\","
+        "        \"space\": \"vendor-4491\""
+        "     } ],"
+        "    \"option-data\": [ {"
+        "          \"name\": \"config-file\","
+        "          \"space\": \"vendor-4491\","
+        "          \"data\": \"normal_erouter_v6.cm\","
+        "          \"always-send\": true"
+        "        }],"
+        "\"subnet6\": [ { "
+        "    \"pools\": [ { \"pool\": \"2001:db8:1::/64\" } ],"
+        "    \"subnet\": \"2001:db8:1::/48\", "
+        "    \"renew-timer\": 1000, "
+        "    \"rebind-timer\": 1000, "
+        "    \"preferred-lifetime\": 3000,"
+        "    \"valid-lifetime\": 4000,"
+        "    \"interface-id\": \"\","
+        "    \"interface\": \"eth0\""
+        " } ],"
+        "\"valid-lifetime\": 4000 }";
+
+    ASSERT_NO_THROW(configure(config));
+
+    Pkt6Ptr sol = Pkt6Ptr(new Pkt6(DHCPV6_SOLICIT, 1234));
+    sol->setRemoteAddr(IOAddress("fe80::abcd"));
+    sol->setIface("eth0");
+    sol->addOption(generateIA(D6O_IA_NA, 234, 1500, 3000));
+    OptionPtr clientid = generateClientId();
+    sol->addOption(clientid);
+
+    // Let's add a vendor-option (vendor-id=4491).
+    OptionPtr vendor(new OptionVendor(Option::V6, 4491));
+    sol->addOption(vendor);
+
+    // Pass it to the server and get an advertise
+    Pkt6Ptr adv = srv_.processSolicit(sol);
+
+    // check if we get response at all
+    ASSERT_TRUE(adv);
+
+    // Check if there is vendor option response
+    OptionPtr tmp = adv->getOption(D6O_VENDOR_OPTS);
+    ASSERT_TRUE(tmp);
+
+    // The response should be OptionVendor object
+    boost::shared_ptr<OptionVendor> vendor_resp =
+        boost::dynamic_pointer_cast<OptionVendor>(tmp);
+    ASSERT_TRUE(vendor_resp);
+
+    OptionPtr docsis33 = vendor_resp->getOption(33);
+    ASSERT_TRUE(docsis33);
+
+    OptionStringPtr config_file = boost::dynamic_pointer_cast<OptionString>(docsis33);
+    ASSERT_TRUE(config_file);
+    EXPECT_EQ("normal_erouter_v6.cm", config_file->getValue());
+}
+
 // Test checks whether it is possible to use option definitions defined in
 // src/lib/dhcp/docsis3_option_defs.h.
 TEST_F(Dhcpv6SrvTest, vendorOptionsDocsisDefinitions) {
@@ -1681,7 +1872,7 @@ TEST_F(Dhcpv6SrvTest, vendorOptionsDocsisDefinitions) {
         "          \"code\": ";
     string config_postfix = ","
         "          \"data\": \"normal_erouter_v6.cm\","
-        "          \"csv-format\": True"
+        "          \"csv-format\": true"
         "        }],"
         "\"subnet6\": [ { "
         "    \"pools\": [ { \"pool\": \"2001:db8:1::/64\" } ],"
@@ -1703,8 +1894,10 @@ TEST_F(Dhcpv6SrvTest, vendorOptionsDocsisDefinitions) {
     // definition, the config should fail.
     string config_bogus = config_prefix + "99" + config_postfix;
 
-    ElementPtr json_bogus = Element::fromJSON(config_bogus);
-    ElementPtr json_valid = Element::fromJSON(config_valid);
+    ConstElementPtr json_bogus;
+    ASSERT_NO_THROW(json_bogus = parseDHCP6(config_bogus));
+    ConstElementPtr json_valid;
+    ASSERT_NO_THROW(json_valid = parseDHCP6(config_valid));
 
     NakedDhcpv6Srv srv(0);
 
@@ -1720,432 +1913,6 @@ TEST_F(Dhcpv6SrvTest, vendorOptionsDocsisDefinitions) {
     comment_ = isc::config::parseAnswer(rcode_, x);
     ASSERT_EQ(0, rcode_);
 }
-
-// Checks if DOCSIS client packets are classified properly
-TEST_F(Dhcpv6SrvTest, docsisClientClassification) {
-
-    NakedDhcpv6Srv srv(0);
-
-    // Let's create a relayed SOLICIT. This particular relayed SOLICIT has
-    // vendor-class set to docsis3.0
-    Pkt6Ptr sol1;
-    ASSERT_NO_THROW(sol1 = PktCaptures::captureDocsisRelayedSolicit());
-    ASSERT_NO_THROW(sol1->unpack());
-
-    srv.classifyPacket(sol1);
-
-    // It should belong to docsis3.0 class. It should not belong to eRouter1.0
-    EXPECT_TRUE(sol1->inClass("VENDOR_CLASS_docsis3.0"));
-    EXPECT_FALSE(sol1->inClass("eRouter1.0"));
-
-    // Let's get a relayed SOLICIT. This particular relayed SOLICIT has
-    // vendor-class set to eRouter1.0
-    Pkt6Ptr sol2;
-    ASSERT_NO_THROW(sol2 = PktCaptures::captureeRouterRelayedSolicit());
-    ASSERT_NO_THROW(sol2->unpack());
-
-    srv.classifyPacket(sol2);
-
-    EXPECT_TRUE(sol2->inClass(srv.VENDOR_CLASS_PREFIX + "eRouter1.0"));
-    EXPECT_FALSE(sol2->inClass(srv.VENDOR_CLASS_PREFIX + "docsis3.0"));
-}
-
-// Checks if client packets are classified properly using match expressions.
-// Note option names and definitions are used.
-TEST_F(Dhcpv6SrvTest, matchClassification) {
-    IfaceMgrTestConfig test_config(true);
-
-    NakedDhcpv6Srv srv(0);
-
-    // The router class matches incoming packets with foo in a host-name
-    // option (code 1234) and sets an ipv6-forwarding option in the response.
-    string config = "{ \"interfaces-config\": {"
-        "    \"interfaces\": [ \"*\" ] }, "
-        "\"preferred-lifetime\": 3000,"
-        "\"rebind-timer\": 2000, "
-        "\"renew-timer\": 1000, "
-        "\"valid-lifetime\": 4000, "
-        "\"option-def\": [ "
-        "{   \"name\": \"host-name\","
-        "    \"code\": 1234,"
-        "    \"type\": \"string\" },"
-        "{   \"name\": \"ipv6-forwarding\","
-        "    \"code\": 2345,"
-        "    \"type\": \"boolean\" }],"
-        "\"subnet6\": [ "
-        "{   \"pools\": [ { \"pool\": \"2001:db8:1::/64\" } ], "
-        "    \"subnet\": \"2001:db8:1::/48\", "
-        "    \"interface\": \"eth1\" } ],"
-        "\"client-classes\": [ "
-        "{   \"name\": \"router\", "
-        "    \"option-data\": ["
-        "        {    \"name\": \"ipv6-forwarding\", "
-        "             \"data\": \"true\" } ], "
-        "    \"test\": \"option[host-name].text == 'foo'\" } ] }";
-    ASSERT_NO_THROW(configure(config));
-
-    // Create packets with enough to select the subnet
-    OptionPtr clientid = generateClientId();
-    Pkt6Ptr query1(new Pkt6(DHCPV6_SOLICIT, 1234));
-    query1->setRemoteAddr(IOAddress("fe80::abcd"));
-    query1->addOption(clientid);
-    query1->setIface("eth1");
-    query1->addOption(generateIA(D6O_IA_NA, 123, 1500, 3000));
-    Pkt6Ptr query2(new Pkt6(DHCPV6_SOLICIT, 1234));
-    query2->setRemoteAddr(IOAddress("fe80::abcd"));
-    query2->addOption(clientid);
-    query2->setIface("eth1");
-    query2->addOption(generateIA(D6O_IA_NA, 234, 1500, 3000));
-    Pkt6Ptr query3(new Pkt6(DHCPV6_SOLICIT, 1234));
-    query3->setRemoteAddr(IOAddress("fe80::abcd"));
-    query3->addOption(clientid);
-    query3->setIface("eth1");
-    query3->addOption(generateIA(D6O_IA_NA, 345, 1500, 3000));
-
-    // Create and add an ORO option to the first 2 queries
-    OptionUint16ArrayPtr oro(new OptionUint16Array(Option::V6, D6O_ORO));
-    ASSERT_TRUE(oro);
-    oro->addValue(2345);
-    query1->addOption(oro);
-    query2->addOption(oro);
-
-    // Create and add a host-name option to the first and last queries
-    OptionStringPtr hostname(new OptionString(Option::V6, 1234, "foo"));
-    ASSERT_TRUE(hostname);
-    query1->addOption(hostname);
-    query3->addOption(hostname);
-
-    // Classify packets
-    srv.classifyPacket(query1);
-    srv.classifyPacket(query2);
-    srv.classifyPacket(query3);
-
-    // Packets with the exception of the second should be in the router class
-    EXPECT_TRUE(query1->inClass("router"));
-    EXPECT_FALSE(query2->inClass("router"));
-    EXPECT_TRUE(query3->inClass("router"));
-
-    // Process queries
-    Pkt6Ptr response1 = srv.processSolicit(query1);
-    Pkt6Ptr response2 = srv.processSolicit(query2);
-    Pkt6Ptr response3 = srv.processSolicit(query3);
-
-    // Classification processing should add an ip-forwarding option
-    OptionPtr opt1 = response1->getOption(2345);
-    EXPECT_TRUE(opt1);
-
-    // But only for the first query: second was not classified
-    OptionPtr opt2 = response2->getOption(2345);
-    EXPECT_FALSE(opt2);
-
-    // But only for the first query: third has no ORO
-    OptionPtr opt3 = response3->getOption(2345);
-    EXPECT_FALSE(opt3);
-}
-
-// Checks subnet options have the priority over class options
-TEST_F(Dhcpv6SrvTest, subnetClassPriority) {
-    IfaceMgrTestConfig test_config(true);
-
-    NakedDhcpv6Srv srv(0);
-
-    // Subnet sets an ipv6-forwarding option in the response.
-    // The router class matches incoming packets with foo in a host-name
-    // option (code 1234) and sets an ipv6-forwarding option in the response.
-    string config = "{ \"interfaces-config\": {"
-        "    \"interfaces\": [ \"*\" ] }, "
-        "\"preferred-lifetime\": 3000,"
-        "\"rebind-timer\": 2000, "
-        "\"renew-timer\": 1000, "
-        "\"valid-lifetime\": 4000, "
-        "\"option-def\": [ "
-        "{   \"name\": \"host-name\","
-        "    \"code\": 1234,"
-        "    \"type\": \"string\" },"
-        "{   \"name\": \"ipv6-forwarding\","
-        "    \"code\": 2345,"
-        "    \"type\": \"boolean\" }],"
-        "\"subnet6\": [ "
-        "{   \"pools\": [ { \"pool\": \"2001:db8:1::/64\" } ], "
-        "    \"subnet\": \"2001:db8:1::/48\", "
-        "    \"interface\": \"eth1\", "
-        "    \"option-data\": ["
-        "        {    \"name\": \"ipv6-forwarding\", "
-        "             \"data\": \"false\" } ] } ], "
-        "\"client-classes\": [ "
-        "{   \"name\": \"router\","
-        "    \"option-data\": ["
-        "        {    \"name\": \"ipv6-forwarding\", "
-        "             \"data\": \"true\" } ], "
-        "    \"test\": \"option[1234].text == 'foo'\" } ] }";
-    ASSERT_NO_THROW(configure(config));
-
-    // Create a packet with enough to select the subnet and go through
-    // the SOLICIT processing
-    Pkt6Ptr query(new Pkt6(DHCPV6_SOLICIT, 1234));
-    query->setRemoteAddr(IOAddress("fe80::abcd"));
-    OptionPtr clientid = generateClientId();
-    query->addOption(clientid);
-    query->setIface("eth1");
-    query->addOption(generateIA(D6O_IA_NA, 123, 1500, 3000));
-
-    // Create and add an ORO option to the query
-    OptionUint16ArrayPtr oro(new OptionUint16Array(Option::V6, D6O_ORO));
-    ASSERT_TRUE(oro);
-    oro->addValue(2345);
-    query->addOption(oro);
-
-    // Create and add a host-name option to the query
-    OptionStringPtr hostname(new OptionString(Option::V6, 1234, "foo"));
-    ASSERT_TRUE(hostname);
-    query->addOption(hostname);
-
-    // Classify the packet
-    srv.classifyPacket(query);
-
-    // The packet should be in the router class
-    EXPECT_TRUE(query->inClass("router"));
-
-    // Process the query
-    Pkt6Ptr response = srv.processSolicit(query);
-
-    // Processing should add an ip-forwarding option
-    OptionPtr opt = response->getOption(2345);
-    ASSERT_TRUE(opt);
-    ASSERT_GT(opt->len(), opt->getHeaderLen());
-    // Classification sets the value to true/1, subnet to false/0
-    // Here subnet has the priority
-    EXPECT_EQ(0, opt->getUint8());
-}
-
-// Checks subnet options have the priority over global options
-TEST_F(Dhcpv6SrvTest, subnetGlobalPriority) {
-    IfaceMgrTestConfig test_config(true);
-
-    NakedDhcpv6Srv srv(0);
-
-    // Subnet sets an ipv6-forwarding option in the response.
-    // The router class matches incoming packets with foo in a host-name
-    // option (code 1234) and sets an ipv6-forwarding option in the response.
-    string config = "{ \"interfaces-config\": {"
-        "    \"interfaces\": [ \"*\" ] }, "
-        "\"preferred-lifetime\": 3000,"
-        "\"rebind-timer\": 2000, "
-        "\"renew-timer\": 1000, "
-        "\"valid-lifetime\": 4000, "
-        "\"option-def\": [ "
-        "{   \"name\": \"host-name\","
-        "    \"code\": 1234,"
-        "    \"type\": \"string\" },"
-        "{   \"name\": \"ipv6-forwarding\","
-        "    \"code\": 2345,"
-        "    \"type\": \"boolean\" }],"
-        "\"option-data\": ["
-        "    {    \"name\": \"ipv6-forwarding\", "
-        "         \"data\": \"false\" } ], "
-        "\"subnet6\": [ "
-        "{   \"pools\": [ { \"pool\": \"2001:db8:1::/64\" } ], "
-        "    \"subnet\": \"2001:db8:1::/48\", "
-        "    \"interface\": \"eth1\", "
-        "    \"option-data\": ["
-        "        {    \"name\": \"ipv6-forwarding\", "
-        "             \"data\": \"false\" } ] } ] }";
-    ASSERT_NO_THROW(configure(config));
-
-    // Create a packet with enough to select the subnet and go through
-    // the SOLICIT processing
-    Pkt6Ptr query(new Pkt6(DHCPV6_SOLICIT, 1234));
-    query->setRemoteAddr(IOAddress("fe80::abcd"));
-    OptionPtr clientid = generateClientId();
-    query->addOption(clientid);
-    query->setIface("eth1");
-    query->addOption(generateIA(D6O_IA_NA, 123, 1500, 3000));
-
-    // Create and add an ORO option to the query
-    OptionUint16ArrayPtr oro(new OptionUint16Array(Option::V6, D6O_ORO));
-    ASSERT_TRUE(oro);
-    oro->addValue(2345);
-    query->addOption(oro);
-
-    // Create and add a host-name option to the query
-    OptionStringPtr hostname(new OptionString(Option::V6, 1234, "foo"));
-    ASSERT_TRUE(hostname);
-    query->addOption(hostname);
-
-    // Process the query
-    Pkt6Ptr response = srv.processSolicit(query);
-
-    // Processing should add an ip-forwarding option
-    OptionPtr opt = response->getOption(2345);
-    ASSERT_TRUE(opt);
-    ASSERT_GT(opt->len(), opt->getHeaderLen());
-    // Global sets the value to true/1, subnet to false/0
-    // Here subnet has the priority
-    EXPECT_EQ(0, opt->getUint8());
-}
-
-// Checks class options have the priority over global options
-TEST_F(Dhcpv6SrvTest, classGlobalPriority) {
-    IfaceMgrTestConfig test_config(true);
-
-    NakedDhcpv6Srv srv(0);
-
-    // A global ipv6-forwarding option is set in the response.
-    // The router class matches incoming packets with foo in a host-name
-    // option (code 1234) and sets an ipv6-forwarding option in the response.
-    string config = "{ \"interfaces-config\": {"
-        "    \"interfaces\": [ \"*\" ] }, "
-        "\"preferred-lifetime\": 3000,"
-        "\"rebind-timer\": 2000, "
-        "\"renew-timer\": 1000, "
-        "\"valid-lifetime\": 4000, "
-        "\"option-def\": [ "
-        "{   \"name\": \"host-name\","
-        "    \"code\": 1234,"
-        "    \"type\": \"string\" },"
-        "{   \"name\": \"ipv6-forwarding\","
-        "    \"code\": 2345,"
-        "    \"type\": \"boolean\" }],"
-        "\"subnet6\": [ "
-        "{   \"pools\": [ { \"pool\": \"2001:db8:1::/64\" } ], "
-        "    \"subnet\": \"2001:db8:1::/48\", "
-        "    \"interface\": \"eth1\" } ],"
-        "\"option-data\": ["
-        "    {    \"name\": \"ipv6-forwarding\", "
-        "         \"data\": \"false\" } ], "
-        "\"client-classes\": [ "
-        "{   \"name\": \"router\","
-        "    \"option-data\": ["
-        "        {    \"name\": \"ipv6-forwarding\", "
-        "             \"data\": \"true\" } ], "
-        "    \"test\": \"option[1234].text == 'foo'\" } ] }";
-    ASSERT_NO_THROW(configure(config));
-
-    // Create a packet with enough to select the subnet and go through
-    // the SOLICIT processing
-    Pkt6Ptr query(new Pkt6(DHCPV6_SOLICIT, 1234));
-    query->setRemoteAddr(IOAddress("fe80::abcd"));
-    OptionPtr clientid = generateClientId();
-    query->addOption(clientid);
-    query->setIface("eth1");
-    query->addOption(generateIA(D6O_IA_NA, 123, 1500, 3000));
-
-    // Create and add an ORO option to the query
-    OptionUint16ArrayPtr oro(new OptionUint16Array(Option::V6, D6O_ORO));
-    ASSERT_TRUE(oro);
-    oro->addValue(2345);
-    query->addOption(oro);
-
-    // Create and add a host-name option to the query
-    OptionStringPtr hostname(new OptionString(Option::V6, 1234, "foo"));
-    ASSERT_TRUE(hostname);
-    query->addOption(hostname);
-
-    // Classify the packet
-    srv.classifyPacket(query);
-
-    // The packet should be in the router class
-    EXPECT_TRUE(query->inClass("router"));
-
-    // Process the query
-    Pkt6Ptr response = srv.processSolicit(query);
-
-    // Processing should add an ip-forwarding option
-    OptionPtr opt = response->getOption(2345);
-    ASSERT_TRUE(opt);
-    ASSERT_GT(opt->len(), opt->getHeaderLen());
-    // Classification sets the value to true/1, global to false/0
-    // Here class has the priority
-    EXPECT_NE(0, opt->getUint8());
-}
-
-// Checks if the client-class field is indeed used for subnet selection.
-// Note that packet classification is already checked in Dhcpv6SrvTest
-// .*Classification above.
-TEST_F(Dhcpv6SrvTest, clientClassifySubnet) {
-
-    // This test configures 2 subnets. We actually only need the
-    // first one, but since there's still this ugly hack that picks
-    // the pool if there is only one, we must use more than one
-    // subnet. That ugly hack will be removed in #3242, currently
-    // under review.
-
-    // The second subnet does not play any role here. The client's
-    // IP address belongs to the first subnet, so only that first
-    // subnet is being tested.
-    string config = "{ \"interfaces-config\": {"
-        "  \"interfaces\": [ \"*\" ]"
-        "},"
-        "\"preferred-lifetime\": 3000,"
-        "\"rebind-timer\": 2000, "
-        "\"renew-timer\": 1000, "
-        "\"subnet6\": [ "
-        " {  \"pools\": [ { \"pool\": \"2001:db8:1::/64\" } ],"
-        "    \"subnet\": \"2001:db8:1::/48\", "
-        "    \"client-class\": \"foo\" "
-        " }, "
-        " {  \"pools\": [ { \"pool\": \"2001:db8:2::/64\" } ],"
-        "    \"subnet\": \"2001:db8:2::/48\", "
-        "    \"client-class\": \"xyzzy\" "
-        " } "
-        "],"
-        "\"valid-lifetime\": 4000 }";
-
-    ASSERT_NO_THROW(configure(config));
-
-    Pkt6Ptr sol = Pkt6Ptr(new Pkt6(DHCPV6_SOLICIT, 1234));
-    sol->setRemoteAddr(IOAddress("2001:db8:1::3"));
-    sol->addOption(generateIA(D6O_IA_NA, 234, 1500, 3000));
-    OptionPtr clientid = generateClientId();
-    sol->addOption(clientid);
-
-    // This discover does not belong to foo class, so it will not
-    // be serviced
-    EXPECT_FALSE(srv_.selectSubnet(sol));
-
-    // Let's add the packet to bar class and try again.
-    sol->addClass("bar");
-
-    // Still not supported, because it belongs to wrong class.
-    EXPECT_FALSE(srv_.selectSubnet(sol));
-
-    // Let's add it to matching class.
-    sol->addClass("foo");
-
-    // This time it should work
-    EXPECT_TRUE(srv_.selectSubnet(sol));
-}
-
-// Tests whether a packet with custom vendor-class (not erouter or docsis)
-// is classified properly.
-TEST_F(Dhcpv6SrvTest, vendorClientClassification2) {
-    NakedDhcpv6Srv srv(0);
-
-    // Let's create a SOLICIT.
-    Pkt6Ptr sol = Pkt6Ptr(new Pkt6(DHCPV6_SOLICIT, 1234));
-    sol->setRemoteAddr(IOAddress("2001:db8:1::3"));
-    sol->addOption(generateIA(D6O_IA_NA, 234, 1500, 3000));
-    OptionPtr clientid = generateClientId();
-    sol->addOption(clientid);
-
-    // Now let's add a vendor-class with id=1234 and content "foo"
-    OptionVendorClassPtr vendor_class(new OptionVendorClass(Option::V6, 1234));
-    OpaqueDataTuple tuple(OpaqueDataTuple::LENGTH_2_BYTES);
-    tuple = "foo";
-    vendor_class->addTuple(tuple);
-    sol->addOption(vendor_class);
-
-    // Now the server classifies the packet.
-    srv.classifyPacket(sol);
-
-    // The packet should now belong to VENDOR_CLASS_foo.
-    EXPECT_TRUE(sol->inClass(srv.VENDOR_CLASS_PREFIX + "foo"));
-
-    // It should not belong to "foo"
-    EXPECT_FALSE(sol->inClass("foo"));
-
-}
-
 
 // This test checks that the server will handle a Solicit with the Vendor Class
 // having a length of 4 (enterprise-id only).
@@ -2231,93 +1998,30 @@ TEST_F(Dhcpv6SrvTest, relayOverride) {
 
     // This is just a sanity check, we're using regular method: the relay
     // belongs to the first (2001:db8:1::/64) subnet, so it's an easy decision.
-    EXPECT_TRUE(subnet1 == srv_.selectSubnet(sol));
+    bool drop = false;
+    EXPECT_TRUE(subnet1 == srv_.selectSubnet(sol, drop));
+    EXPECT_FALSE(drop);
 
     // Relay belongs to the second subnet, so it should be selected.
     sol->relay_info_.back().linkaddr_ = IOAddress("2001:db8:2::1");
-    EXPECT_TRUE(subnet2 == srv_.selectSubnet(sol));
+    EXPECT_TRUE(subnet2 == srv_.selectSubnet(sol, drop));
+    EXPECT_FALSE(drop);
 
     // Now let's check if the relay override for the first subnets works
     sol->relay_info_.back().linkaddr_ = IOAddress("2001:db8:3::1");
-    EXPECT_TRUE(subnet1 == srv_.selectSubnet(sol));
+    EXPECT_TRUE(subnet1 == srv_.selectSubnet(sol, drop));
+    EXPECT_FALSE(drop);
 
     // Now repeat that for relay matching the second subnet.
     sol->relay_info_.back().linkaddr_ = IOAddress("2001:db8:3::2");
-    EXPECT_TRUE(subnet2 == srv_.selectSubnet(sol));
+    EXPECT_TRUE(subnet2 == srv_.selectSubnet(sol, drop));
+    EXPECT_FALSE(drop);
 
     // Finally, let's check that completely mismatched relay will not get us
     // anything
     sol->relay_info_.back().linkaddr_ = IOAddress("2001:db8:1234::1");
-    EXPECT_FALSE(srv_.selectSubnet(sol));
-}
-
-// Checks if relay IP address specified in the relay-info structure can be
-// used together with client-classification.
-TEST_F(Dhcpv6SrvTest, relayOverrideAndClientClass) {
-
-    // This test configures 2 subnets. They both are on the same link, so they
-    // have the same relay-ip address. Furthermore, the first subnet is
-    // reserved for clients that belong to class "foo".
-    string config = "{ \"interfaces-config\": {"
-        "  \"interfaces\": [ \"*\" ]"
-        "},"
-        "\"preferred-lifetime\": 3000,"
-        "\"rebind-timer\": 2000, "
-        "\"renew-timer\": 1000, "
-        "\"subnet6\": [ "
-        " {  \"pools\": [ { \"pool\": \"2001:db8:1::/64\" } ],"
-        "    \"subnet\": \"2001:db8:1::/48\", "
-        "    \"client-class\": \"foo\", "
-        "    \"relay\": { "
-        "        \"ip-address\": \"2001:db8:3::1\""
-        "    }"
-        " }, "
-        " {  \"pools\": [ { \"pool\": \"2001:db8:2::/64\" } ],"
-        "    \"subnet\": \"2001:db8:2::/48\", "
-        "    \"relay\": { "
-        "        \"ip-address\": \"2001:db8:3::1\""
-        "    }"
-        " } "
-        "],"
-        "\"valid-lifetime\": 4000 }";
-
-    // Use this config to set up the server
-    ASSERT_NO_THROW(configure(config));
-
-    // Let's get the subnet configuration objects
-    const Subnet6Collection* subnets =
-        CfgMgr::instance().getCurrentCfg()->getCfgSubnets6()->getAll();
-    ASSERT_EQ(2, subnets->size());
-
-    // Let's get them for easy reference
-    Subnet6Ptr subnet1 = (*subnets)[0];
-    Subnet6Ptr subnet2 = (*subnets)[1];
-    ASSERT_TRUE(subnet1);
-    ASSERT_TRUE(subnet2);
-
-    Pkt6Ptr sol = Pkt6Ptr(new Pkt6(DHCPV6_SOLICIT, 1234));
-    sol->setRemoteAddr(IOAddress("2001:db8:1::3"));
-    sol->addOption(generateIA(D6O_IA_NA, 234, 1500, 3000));
-    OptionPtr clientid = generateClientId();
-    sol->addOption(clientid);
-
-    // Now pretend the packet came via one relay.
-    Pkt6::RelayInfo relay;
-    relay.linkaddr_ = IOAddress("2001:db8:3::1");
-    relay.peeraddr_ = IOAddress("fe80::1");
-
-    sol->relay_info_.push_back(relay);
-
-    // This packet does not belong to class foo, so it should be rejected in
-    // subnet[0], even though the relay-ip matches. It should be accepted in
-    // subnet[1], because the subnet matches and there are no class
-    // requirements.
-    EXPECT_TRUE(subnet2 == srv_.selectSubnet(sol));
-
-    // Now let's add this packet to class foo and recheck. This time it should
-    // be accepted in the first subnet, because both class and relay-ip match.
-    sol->addClass("foo");
-    EXPECT_TRUE(subnet1 == srv_.selectSubnet(sol));
+    EXPECT_FALSE(srv_.selectSubnet(sol, drop));
+    EXPECT_FALSE(drop);
 }
 
 /// @brief Creates RSOO option with suboptions
@@ -2333,7 +2037,7 @@ TEST_F(Dhcpv6SrvTest, relayOverrideAndClientClass) {
 /// @param payload specified payload (0 = fill payload with repeating option code)
 /// @return RSOO with nested options
 OptionPtr createRSOO(const std::vector<uint16_t>& codes, uint8_t payload = 0) {
-    OptionDefinitionPtr def = LibDHCP::getOptionDef(Option::V6, D6O_RSOO);
+    OptionDefinitionPtr def = LibDHCP::getOptionDef(DHCP6_OPTION_SPACE, D6O_RSOO);
     if (!def) {
         isc_throw(BadValue, "Can't find RSOO definition");
     }
@@ -2522,6 +2226,7 @@ TEST_F(Dhcpv6SrvTest, rsooOverride) {
         "    } ],"
         "    \"option-data\": [ {"
         "      \"code\": 120,"
+        "      \"csv-format\": false,"
         "      \"data\": \"05\""
         "    } ],"
         "    \"preferred-lifetime\": 3000,"
@@ -2767,6 +2472,66 @@ TEST_F(Dhcpv6SrvTest, tooLongServerId) {
     // responses or not. The goal is to check that the server didn't throw
     // any exceptions.
     EXPECT_NO_THROW(client.doSARR());
+}
+
+// Checks if user-contexts are parsed properly.
+TEST_F(Dhcpv6SrvTest, userContext) {
+
+    IfaceMgrTestConfig test_config(true);
+
+    NakedDhcpv6Srv srv(0);
+
+    // This config has one subnet with user-context with one
+    // pool (also with context). Make sure the configuration could be accepted.
+    EXPECT_NO_THROW(configure(CONFIGS[3]));
+
+    // Now make sure the data was not lost.
+    ConstSrvConfigPtr cfg = CfgMgr::instance().getCurrentCfg();
+    const Subnet6Collection* subnets = cfg->getCfgSubnets6()->getAll();
+    ASSERT_TRUE(subnets);
+    ASSERT_EQ(1, subnets->size());
+
+    // Let's get the subnet and check its context.
+    Subnet6Ptr subnet1 = (*subnets)[0];
+    ASSERT_TRUE(subnet1);
+    ASSERT_TRUE(subnet1->getContext());
+    EXPECT_EQ("{ \"secure\": false }", subnet1->getContext()->str());
+
+    // Ok, not get the address pool in it and check its context, too.
+    PoolCollection pools = subnet1->getPools(Lease::TYPE_NA);
+    ASSERT_EQ(1, pools.size());
+    ASSERT_TRUE(pools[0]);
+    ASSERT_TRUE(pools[0]->getContext());
+    EXPECT_EQ("{ \"value\": 42 }", pools[0]->getContext()->str());
+
+    // Ok, not get the prefix pool in it and check its context, too.
+    pools = subnet1->getPools(Lease::TYPE_PD);
+    ASSERT_EQ(1, pools.size());
+    ASSERT_TRUE(pools[0]);
+    ASSERT_TRUE(pools[0]->getContext());
+    EXPECT_EQ("{ \"type\": \"prefixes\" }", pools[0]->getContext()->str());
+}
+
+// Verifies that the server will still process a packet which fails to
+// parse with a SkipRemainingOptions exception
+TEST_F(Dhcpv6SrvTest, truncatedVIVSO) {
+    NakedDhcpv6Srv srv(0);
+
+    // Let's create a SOLICIT with a VIVSO whose length is too short
+    Pkt6Ptr sol = PktCaptures::captureSolicitWithTruncatedVIVSO();
+
+    // Simulate that we have received that traffic
+    srv.fakeReceive(sol);
+
+    // Server will now process to run its normal loop, but instead of calling
+    // IfaceMgr::receive6(), it will read all packets from the list set by
+    // fakeReceive()
+    srv.run();
+
+    // Make sure we got an Advertise...
+    ASSERT_FALSE(srv.fake_sent_.empty());
+    Pkt6Ptr adv = srv.fake_sent_.front();
+    ASSERT_TRUE(adv);
 }
 
 

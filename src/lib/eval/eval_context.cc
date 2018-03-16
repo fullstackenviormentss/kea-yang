@@ -1,18 +1,22 @@
-// Copyright (C) 2015-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2015-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+#include <config.h>
+
 #include <dhcp/dhcp6.h>
 #include <dhcp/option.h>
 #include <dhcp/option_definition.h>
 #include <dhcp/libdhcp++.h>
+#include <dhcp/option_space.h>
 #include <eval/eval_context.h>
 #include <eval/parser.h>
 #include <exceptions/exceptions.h>
 #include <boost/lexical_cast.hpp>
 #include <fstream>
+#include <limits>
 
 EvalContext::EvalContext(const Option::Universe& option_universe)
   : trace_scanning_(false), trace_parsing_(false),
@@ -25,11 +29,11 @@ EvalContext::~EvalContext()
 }
 
 bool
-EvalContext::parseString(const std::string& str)
+EvalContext::parseString(const std::string& str, ParserType type)
 {
     file_ = "<string>";
     string_ = str;
-    scanStringBegin();
+    scanStringBegin(type);
     isc::eval::EvalParser parser(*this);
     parser.set_debug_level(trace_parsing_);
     int res = parser.parse();
@@ -78,12 +82,17 @@ uint16_t
 EvalContext::convertOptionName(const std::string& option_name,
                                const isc::eval::location& loc)
 {
-    OptionDefinitionPtr option_def = LibDHCP::getOptionDef(option_universe_,
+    const std::string global_space = (option_universe_ == Option::V4) ?
+        DHCP4_OPTION_SPACE : DHCP6_OPTION_SPACE;
+
+    OptionDefinitionPtr option_def = LibDHCP::getOptionDef(global_space,
                                                            option_name);
     if (!option_def) {
-        const std::string global_space =
-            (option_universe_ == Option::V4) ? "dhcp4" : "dhcp6";
         option_def = LibDHCP::getRuntimeOptionDef(global_space, option_name);
+    }
+
+    if (!option_def) {
+        option_def = LibDHCP::getLastResortOptionDef(global_space, option_name);
     }
 
     if (!option_def) {
@@ -93,28 +102,88 @@ EvalContext::convertOptionName(const std::string& option_name,
     return (option_def->getCode());
 }
 
-uint8_t
+int8_t
 EvalContext::convertNestLevelNumber(const std::string& nest_level,
                                     const isc::eval::location& loc)
 {
-    int n = 0;
-    try {
-        n  = boost::lexical_cast<int>(nest_level);
-    } catch (const boost::bad_lexical_cast &) {
-        error(loc, "Nest level has invalid value in " + nest_level);
-    }
+    int8_t n = convertInt8(nest_level, loc);
     if (option_universe_ == Option::V6) {
-        if (n < 0 || n >= HOP_COUNT_LIMIT) {
+        if ((n < - HOP_COUNT_LIMIT) || (n >= HOP_COUNT_LIMIT)) {
             error(loc, "Nest level has invalid value in "
-                      + nest_level + ". Allowed range: 0..31");
-	}
+                      + nest_level + ". Allowed range: -32..31");
+        }
     } else {
         error(loc, "Nest level invalid for DHCPv4 packets");
+    }
+
+    return (n);
+}
+
+uint8_t
+EvalContext::convertUint8(const std::string& number,
+                          const isc::eval::location& loc)
+{
+    int n = 0;
+    try {
+        n  = boost::lexical_cast<int>(number);
+    } catch (const boost::bad_lexical_cast &) {
+        error(loc, "Invalid integer value in " + number);
+    }
+    if (n < 0 || n > std::numeric_limits<uint8_t>::max()) {
+        error(loc, "Invalid value in "
+              + number + ". Allowed range: 0..255");
     }
 
     return (static_cast<uint8_t>(n));
 }
 
+int8_t
+EvalContext::convertInt8(const std::string& number,
+                         const isc::eval::location& loc)
+{
+    int n = 0;
+    try {
+        n  = boost::lexical_cast<int>(number);
+    } catch (const boost::bad_lexical_cast &) {
+        error(loc, "Invalid integer value in " + number);
+    }
+    if (n < std::numeric_limits<int8_t>::min() ||
+        n > std::numeric_limits<int8_t>::max()) {
+        error(loc, "Invalid value in "
+              + number + ". Allowed range: 0..255");
+    }
+
+    return (static_cast<uint8_t>(n));
+}
+
+uint32_t
+EvalContext::convertUint32(const std::string& number,
+                          const isc::eval::location& loc)
+{
+    uint64_t n = 0;
+    try {
+        n  = boost::lexical_cast<uint64_t>(number);
+    } catch (const boost::bad_lexical_cast &) {
+        error(loc, "Invalid value in " + number);
+    }
+    if (n > std::numeric_limits<uint32_t>::max()) {
+        error(loc, "Invalid value in "
+              + number + ". Allowed range: 0..4294967295");
+    }
+
+    return (static_cast<uint32_t>(n));
+}
+
+std::string
+EvalContext::fromUint32(const uint32_t integer) {
+    std::string tmp(4, 0);
+    tmp[0] = (integer >> 24) & 0xff;
+    tmp[1] = (integer >> 16) & 0xff;
+    tmp[2] = (integer >> 8) & 0xff;
+    tmp[3] = integer & 0xff;
+
+    return (tmp);
+}
 
 void
 EvalContext::fatal (const std::string& what)

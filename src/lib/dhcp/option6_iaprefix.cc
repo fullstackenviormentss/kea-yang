@@ -1,4 +1,4 @@
-// Copyright (C) 2013-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2013-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -10,6 +10,7 @@
 #include <dhcp/dhcp6.h>
 #include <dhcp/libdhcp++.h>
 #include <dhcp/option6_iaprefix.h>
+#include <dhcp/option_space.h>
 #include <exceptions/exceptions.h>
 #include <util/io_utilities.h>
 
@@ -28,7 +29,7 @@ namespace dhcp {
 Option6IAPrefix::Option6IAPrefix(uint16_t type, const isc::asiolink::IOAddress& prefix,
                                  uint8_t prefix_len, uint32_t pref, uint32_t valid)
     :Option6IAAddr(type, prefix, pref, valid), prefix_len_(prefix_len) {
-    setEncapsulatedSpace("dhcp6");
+    setEncapsulatedSpace(DHCP6_OPTION_SPACE);
     // Option6IAAddr will check if prefix is IPv6 and will throw if it is not
     if (prefix_len > 128) {
         isc_throw(BadValue, static_cast<unsigned>(prefix_len)
@@ -40,7 +41,7 @@ Option6IAPrefix::Option6IAPrefix(uint16_t type, const isc::asiolink::IOAddress& 
 Option6IAPrefix::Option6IAPrefix(uint32_t type, OptionBuffer::const_iterator begin,
                              OptionBuffer::const_iterator end)
     :Option6IAAddr(type, begin, end) {
-    setEncapsulatedSpace("dhcp6");
+    setEncapsulatedSpace(DHCP6_OPTION_SPACE);
     unpack(begin, end);
 }
 
@@ -132,7 +133,7 @@ Option6IAPrefix::mask(OptionBuffer::const_iterator begin,
         std::copy(begin, begin + static_cast<uint8_t>(len/8), output_address.begin());
         // The remaining significant bits of the last octet have to be left unchanged,
         // but the remaining bits of this octet must be set to zero. The number of
-        // significant bits is calculated as a reminder from the devision of the
+        // significant bits is calculated as a reminder from the division of the
         // prefix length by 8 (by size of the octet). The number of bits to be set
         // to zero is therefore calculated as: 8 - (len % 8).
         // Next, the mask is created by shifting the 0xFF by the number of bits

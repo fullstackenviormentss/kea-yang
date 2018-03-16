@@ -1,4 +1,4 @@
-// Copyright (C) 2012-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2012-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,7 +8,7 @@
 #define MYSQL_CONNECTION_H
 
 #include <dhcpsrv/database_connection.h>
-#include <dhcpsrv/dhcpsrv_log.h>
+#include <dhcpsrv/db_log.h>
 #include <exceptions/exceptions.h>
 #include <boost/scoped_ptr.hpp>
 #include <mysql.h>
@@ -40,8 +40,8 @@ extern const int MLM_MYSQL_FETCH_FAILURE;
 
 /// @name Current database schema version values.
 //@{
-const uint32_t MYSQL_SCHEMA_VERSION_MAJOR = 4;
-const uint32_t MYSQL_SCHEMA_VERSION_MINOR = 2;
+const uint32_t MYSQL_SCHEMA_VERSION_MAJOR = 6;
+const uint32_t MYSQL_SCHEMA_VERSION_MINOR = 0;
 
 //@}
 
@@ -240,15 +240,21 @@ public:
     ///
     /// Creates the prepared statements for all of the SQL statements used
     /// by the MySQL backend.
-    /// @param tagged_statements an array of statements to be compiled
-    /// @param num_statements number of statements in tagged_statements
+    ///
+    /// @param start_statement Pointer to the first statement in range of the
+    /// statements to be compiled.
+    /// @param end_statement Pointer to the statement marking end of the
+    /// range of statements to be compiled. This last statement is not compiled.
     ///
     /// @throw isc::dhcp::DbOperationError An operation on the open database has
     ///        failed.
     /// @throw isc::InvalidParameter 'index' is not valid for the vector.  This
     ///        represents an internal error within the code.
-    void prepareStatements(const TaggedStatement tagged_statements[],
-                           size_t num_statements);
+    void prepareStatements(const TaggedStatement* start_statement,
+                           const TaggedStatement* end_statement);
+
+    /// @brief Clears prepared statements and text statements.
+    void clearStatements();
 
     /// @brief Open Database
     ///
@@ -375,7 +381,7 @@ public:
             switch(mysql_errno(mysql_)) {
                 // These are the ones we consider fatal. Remember this method is
                 // used to check errors of API calls made subsequent to successfully
-                // connecting.  Errors occuring while attempting to connect are
+                // connecting.  Errors occurring while attempting to connect are
                 // checked in the connection code. An alternative would be to call
                 // mysql_ping() - assuming autoreconnect is off. If that fails
                 // then we know connection is toast.
@@ -384,11 +390,11 @@ public:
             case CR_OUT_OF_MEMORY:
             case CR_CONNECTION_ERROR:
                 // We're exiting on fatal
-                LOG_ERROR(dhcpsrv_logger, DHCPSRV_MYSQL_FATAL_ERROR)
-                         .arg(what)
-                         .arg(text_statements_[static_cast<int>(index)])
-                         .arg(mysql_error(mysql_))
-                         .arg(mysql_errno(mysql_));
+                DB_LOG_ERROR(MYSQL_FATAL_ERROR)
+                    .arg(what)
+                    .arg(text_statements_[static_cast<int>(index)])
+                    .arg(mysql_error(mysql_))
+                    .arg(mysql_errno(mysql_));
                 exit (-1);
 
             default:

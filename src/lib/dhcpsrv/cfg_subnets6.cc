@@ -1,4 +1,4 @@
-// Copyright (C) 2014-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2014-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,25 +7,63 @@
 #include <config.h>
 #include <dhcpsrv/cfg_subnets6.h>
 #include <dhcpsrv/dhcpsrv_log.h>
+#include <dhcpsrv/lease_mgr_factory.h>
 #include <dhcpsrv/subnet_id.h>
+#include <dhcpsrv/addr_utilities.h>
 #include <stats/stats_mgr.h>
+#include <string.h>
+#include <sstream>
 
 using namespace isc::asiolink;
+using namespace isc::data;
 
 namespace isc {
 namespace dhcp {
 
 void
 CfgSubnets6::add(const Subnet6Ptr& subnet) {
-    /// @todo: Check that this new subnet does not cross boundaries of any
-    /// other already defined subnet.
-    if (isDuplicate(*subnet)) {
+    if (getBySubnetId(subnet->getID())) {
         isc_throw(isc::dhcp::DuplicateSubnetID, "ID of the new IPv6 subnet '"
                   << subnet->getID() << "' is already in use");
+
+    } else if (getByPrefix(subnet->toText())) {
+        /// @todo: Check that this new subnet does not cross boundaries of any
+        /// other already defined subnet.
+        isc_throw(isc::dhcp::DuplicateSubnetID, "subnet with the prefix of '"
+                  << subnet->toText() << "' already exists");
     }
+
     LOG_DEBUG(dhcpsrv_logger, DHCPSRV_DBG_TRACE, DHCPSRV_CFGMGR_ADD_SUBNET6)
               .arg(subnet->toText());
     subnets_.push_back(subnet);
+}
+
+void
+CfgSubnets6::del(const ConstSubnet6Ptr& subnet) {
+    auto& index = subnets_.get<SubnetSubnetIdIndexTag>();
+    auto subnet_it = index.find(subnet->getID());
+    if (subnet_it == index.end()) {
+        isc_throw(BadValue, "no subnet with ID of '" << subnet->getID()
+                  << "' found");
+    }
+    index.erase(subnet_it);
+
+    LOG_DEBUG(dhcpsrv_logger, DHCPSRV_DBG_TRACE, DHCPSRV_CFGMGR_DEL_SUBNET6)
+        .arg(subnet->toText());
+}
+
+ConstSubnet6Ptr
+CfgSubnets6::getBySubnetId(const SubnetID& subnet_id) const {
+    const auto& index = subnets_.get<SubnetSubnetIdIndexTag>();
+    auto subnet_it = index.find(subnet_id);
+    return ((subnet_it != index.cend()) ? (*subnet_it) : ConstSubnet6Ptr());
+}
+
+ConstSubnet6Ptr
+CfgSubnets6::getByPrefix(const std::string& subnet_text) const {
+    const auto& index = subnets_.get<SubnetPrefixIndexTag>();
+    auto subnet_it = index.find(subnet_text);
+    return ((subnet_it != index.cend()) ? (*subnet_it) : ConstSubnet6Ptr());
 }
 
 Subnet6Ptr
@@ -161,40 +199,46 @@ CfgSubnets6::selectSubnet(const OptionPtr& interface_id,
     return (Subnet6Ptr());
 }
 
-bool
-CfgSubnets6::isDuplicate(const Subnet6& subnet) const {
-    for (Subnet6Collection::const_iterator subnet_it = subnets_.begin();
-         subnet_it != subnets_.end(); ++subnet_it) {
-        if ((*subnet_it)->getID() == subnet.getID()) {
-            return (true);
+Subnet6Ptr
+CfgSubnets6::getSubnet(const SubnetID id) const {
+
+    /// @todo: Once this code is migrated to multi-index container, use
+    /// an index rather than full scan.
+    for (auto subnet = subnets_.begin(); subnet != subnets_.end(); ++subnet) {
+        if ((*subnet)->getID() == id) {
+            return (*subnet);
         }
     }
-    return (false);
+    return (Subnet6Ptr());
 }
 
 void
 CfgSubnets6::removeStatistics() {
     using namespace isc::stats;
 
+    StatsMgr& stats_mgr = StatsMgr::instance();
     // For each v6 subnet currently configured, remove the statistics.
     for (Subnet6Collection::const_iterator subnet6 = subnets_.begin();
          subnet6 != subnets_.end(); ++subnet6) {
+        SubnetID subnet_id = (*subnet6)->getID();
+        stats_mgr.del(StatsMgr::generateName("subnet", subnet_id, "total-nas"));
 
-        StatsMgr::instance().del(StatsMgr::generateName("subnet",
-                                                        (*subnet6)->getID(),
-                                                        "total-nas"));
+        stats_mgr.del(StatsMgr::generateName("subnet", subnet_id,
+                                             "assigned-nas"));
 
-        StatsMgr::instance().del(StatsMgr::generateName("subnet",
-                                                        (*subnet6)->getID(),
-                                                        "assigned-nas"));
+        stats_mgr.del(StatsMgr::generateName("subnet", subnet_id, "total-pds"));
 
-        StatsMgr::instance().del(StatsMgr::generateName("subnet",
-                                                        (*subnet6)->getID(),
-                                                        "total-pds"));
+        stats_mgr.del(StatsMgr::generateName("subnet", subnet_id,
+                                             "assigned-pds"));
 
-        StatsMgr::instance().del(StatsMgr::generateName("subnet",
-                                                        (*subnet6)->getID(),
-                                                        "assigned-pds"));
+        stats_mgr.del(StatsMgr::generateName("subnet", subnet_id,
+                                             "declined-addresses"));
+
+        stats_mgr.del(StatsMgr::generateName("subnet", subnet_id,
+                                             "declined-reclaimed-addresses"));
+
+        stats_mgr.del(StatsMgr::generateName("subnet", subnet_id,
+                                             "reclaimed-leases"));
     }
 }
 
@@ -202,17 +246,38 @@ void
 CfgSubnets6::updateStatistics() {
     using namespace isc::stats;
 
-    for (Subnet6Collection::const_iterator subnet = subnets_.begin();
-         subnet != subnets_.end(); ++subnet) {
+    StatsMgr& stats_mgr = StatsMgr::instance();
+    // For each v6 subnet currently configured, calculate totals
+    for (Subnet6Collection::const_iterator subnet6 = subnets_.begin();
+         subnet6 != subnets_.end(); ++subnet6) {
+        SubnetID subnet_id = (*subnet6)->getID();
 
-        StatsMgr::instance().setValue(
-            StatsMgr::generateName("subnet", (*subnet)->getID(), "total-nas"),
-            static_cast<int64_t>((*subnet)->getPoolCapacity(Lease::TYPE_NA)));
+        stats_mgr.setValue(StatsMgr::generateName("subnet", subnet_id,
+                                                  "total-nas"),
+                           static_cast<int64_t>
+                           ((*subnet6)->getPoolCapacity(Lease::TYPE_NA)));
 
-        StatsMgr::instance().setValue(
-            StatsMgr::generateName("subnet", (*subnet)->getID(), "total-pds"),
-            static_cast<int64_t>((*subnet)->getPoolCapacity(Lease::TYPE_PD)));
+        stats_mgr.setValue(StatsMgr::generateName("subnet", subnet_id,
+                                                  "total-pds"),
+                            static_cast<int64_t>
+                            ((*subnet6)->getPoolCapacity(Lease::TYPE_PD)));
     }
+
+    // Only recount the stats if we have subnets.
+    if (subnets_.begin() != subnets_.end()) {
+            LeaseMgrFactory::instance().recountLeaseStats6();
+    }
+}
+
+ElementPtr
+CfgSubnets6::toElement() const {
+    ElementPtr result = Element::createList();
+    // Iterate subnets
+    for (Subnet6Collection::const_iterator subnet = subnets_.cbegin();
+         subnet != subnets_.cend(); ++subnet) {
+        result->add((*subnet)->toElement());
+    }
+    return (result);
 }
 
 } // end of namespace isc::dhcp

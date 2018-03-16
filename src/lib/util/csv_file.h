@@ -1,4 +1,4 @@
-// Copyright (C) 2014-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2014-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -354,9 +354,9 @@ public:
     /// This function is exception safe.
     ///
     /// @param col_name Name of the column.
-    /// @return Index of the column or negative value if the column doesn't
-    /// exist.
-    int getColumnIndex(const std::string& col_name) const;
+    /// @return Index of the column.
+    /// @throw OutOfRange if column with such name doesn't exist.
+    size_t getColumnIndex(const std::string& col_name) const;
 
     /// @brief Returns the name of the column.
     ///
@@ -391,7 +391,7 @@ public:
     /// true, the file will be opened and the internal pointer will be set
     /// to the end of file.
     ///
-    /// @param seek_to_end A boolean value which indicates if the intput and
+    /// @param seek_to_end A boolean value which indicates if the input and
     /// output file pointer should be set at the end of file.
     ///
     /// @throw CSVFileError when IO operation fails.

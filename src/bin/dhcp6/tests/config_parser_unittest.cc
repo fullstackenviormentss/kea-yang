@@ -1,4 +1,4 @@
-// Copyright (C) 2012-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2012-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,7 +7,6 @@
 #include <config.h>
 
 #include <cc/command_interpreter.h>
-#include <config/module_spec.h>
 #include <dhcp/libdhcp++.h>
 #include <dhcp/option6_ia.h>
 #include <dhcp/iface_mgr.h>
@@ -17,6 +16,7 @@
 #include <dhcp/tests/iface_mgr_test_config.h>
 #include <dhcp6/json_config_parser.h>
 #include <dhcp6/dhcp6_srv.h>
+#include <dhcp6/ctrl_dhcp6_srv.h>
 #include <dhcpsrv/addr_utilities.h>
 #include <dhcpsrv/cfgmgr.h>
 #include <dhcpsrv/cfg_expiration.h>
@@ -25,11 +25,12 @@
 #include <dhcpsrv/subnet_selector.h>
 #include <dhcpsrv/testutils/config_result_check.h>
 #include <hooks/hooks_manager.h>
-#include <defaults.h>
 
 #include "test_data_files_config.h"
 #include "test_libraries.h"
 #include "marker_file.h"
+#include "dhcp6_test_utils.h"
+#include "get_config_unittest.h"
 
 #include <boost/foreach.hpp>
 #include <gtest/gtest.h>
@@ -55,16 +56,246 @@ using namespace std;
 
 namespace {
 
-std::string specfile(const std::string& name) {
-    return (std::string(DHCP6_SRC_DIR) + "/" + name);
-}
+const char* PARSER_CONFIGS[] = {
+    // CONFIGURATION 0: one subnet with one pool, no user contexts
+    "{"
+    "    \"interfaces-config\": {"
+    "        \"interfaces\": [\"*\" ]"
+    "    },"
+    "    \"valid-lifetime\": 4000,"
+    "    \"preferred-lifetime\": 3000,"
+    "    \"rebind-timer\": 2000,"
+    "    \"renew-timer\": 1000,"
+    "    \"subnet6\": [ {"
+    "        \"pools\": [ "
+    "            { \"pool\":  \"2001:db8::/64\" }"
+    "        ],"
+    "        \"subnet\": \"2001:db8::/32\""
+    "     } ]"
+    "}",
 
-/// @brief Tests that the spec file is valid.
-/// Verifies that the DHCP6 configuration specification file is valid.
-TEST(Dhcp6SpecTest, basicSpec) {
-    ASSERT_NO_THROW(isc::config::
-                    moduleSpecFromFile(specfile("dhcp6.spec")));
-}
+    // Configuration 1: one pool with empty user context
+    "{"
+    "    \"interfaces-config\": {"
+    "        \"interfaces\": [\"*\" ]"
+    "    },"
+    "    \"valid-lifetime\": 4000,"
+    "    \"preferred-lifetime\": 3000,"
+    "    \"rebind-timer\": 2000,"
+    "    \"renew-timer\": 1000,"
+    "    \"subnet6\": [ {"
+    "        \"pools\": [ "
+    "            { \"pool\":  \"2001:db8::/64\","
+    "                \"user-context\": {"
+    "                }"
+    "            }"
+    "        ],"
+    "        \"subnet\": \"2001:db8::/32\""
+    "     } ]"
+    "}",
+
+    // Configuration 2: one pool with user context containing lw4over6 parameters
+    "{"
+    "    \"interfaces-config\": {"
+    "        \"interfaces\": [\"*\" ]"
+    "    },"
+    "    \"valid-lifetime\": 4000,"
+    "    \"preferred-lifetime\": 3000,"
+    "    \"rebind-timer\": 2000,"
+    "    \"renew-timer\": 1000,"
+    "    \"subnet6\": [ {"
+    "        \"pools\": [ "
+    "            { \"pool\":  \"2001:db8::/64\","
+    "                \"user-context\": {"
+    "                    \"lw4over6-sharing-ratio\": 64,"
+    "                    \"lw4over6-v4-pool\": \"192.0.2.0/24\","
+    "                    \"lw4over6-sysports-exclude\": true,"
+    "                    \"lw4over6-bind-prefix-len\": 56"
+    "                }"
+    "            }"
+    "        ],"
+    "        \"subnet\": \"2001:db8::/32\""
+    "     } ]"
+    "}",
+
+    // Configuration 3: one min-max pool with user context containing lw4over6 parameters
+    "{"
+    "    \"interfaces-config\": {"
+    "        \"interfaces\": [\"*\" ]"
+    "    },"
+    "    \"valid-lifetime\": 4000,"
+    "    \"preferred-lifetime\": 3000,"
+    "    \"rebind-timer\": 2000,"
+    "    \"renew-timer\": 1000,"
+    "    \"subnet6\": [ {"
+    "        \"pools\": [ "
+    "            { \"pool\":  \"2001:db8:: - 2001:db8::ffff:ffff:ffff:ffff\","
+    "                \"user-context\": {"
+    "                    \"lw4over6-sharing-ratio\": 64,"
+    "                    \"lw4over6-v4-pool\": \"192.0.2.0/24\","
+    "                    \"lw4over6-sysports-exclude\": true,"
+    "                    \"lw4over6-bind-prefix-len\": 56"
+    "                }"
+    "            }"
+    "        ],"
+    "        \"subnet\": \"2001:db8::/32\""
+    "     } ]"
+    "}",
+
+    // Configuration 4: pd-pool without any user-context
+    "{"
+    "    \"interfaces-config\": {"
+    "        \"interfaces\": [\"*\" ]"
+    "    },"
+    "    \"valid-lifetime\": 4000,"
+    "    \"preferred-lifetime\": 3000,"
+    "    \"rebind-timer\": 2000,"
+    "    \"renew-timer\": 1000,"
+    "    \"subnet6\": [ {"
+    "        \"pd-pools\": [ "
+    "            { \"prefix\": \"2001:db8::\","
+    "              \"prefix-len\": 56,"
+    "              \"delegated-len\": 64 }"
+    "        ],"
+    "        \"subnet\": \"2001:db8::/32\""
+    "     } ]"
+    "}",
+
+    // Configuration 5: pd-pool with empty user-context
+    "{"
+    "    \"interfaces-config\": {"
+    "        \"interfaces\": [\"*\" ]"
+    "    },"
+    "    \"valid-lifetime\": 4000,"
+    "    \"preferred-lifetime\": 3000,"
+    "    \"rebind-timer\": 2000,"
+    "    \"renew-timer\": 1000,"
+    "    \"subnet6\": [ {"
+    "        \"pd-pools\": [ "
+    "            { \"prefix\":  \"2001:db8::\","
+    "              \"prefix-len\": 56,"
+    "              \"delegated-len\": 64,"
+    "              \"user-context\": { }"
+    "            }"
+    "        ],"
+    "        \"subnet\": \"2001:db8::/32\""
+    "     } ]"
+    "}",
+
+    // Configuration 6: pd-pool with user-context with lw4over6 parameters
+    "{"
+    "    \"interfaces-config\": {"
+    "        \"interfaces\": [\"*\" ]"
+    "    },"
+    "    \"valid-lifetime\": 4000,"
+    "    \"preferred-lifetime\": 3000,"
+    "    \"rebind-timer\": 2000,"
+    "    \"renew-timer\": 1000,"
+    "    \"subnet6\": [ {"
+    "        \"pd-pools\": [ "
+    "            { \"prefix\":  \"2001:db8::\","
+    "              \"prefix-len\": 56,"
+    "              \"delegated-len\": 64,"
+    "              \"user-context\": {"
+    "                  \"lw4over6-sharing-ratio\": 64,"
+    "                  \"lw4over6-v4-pool\": \"192.0.2.0/24\","
+    "                  \"lw4over6-sysports-exclude\": true,"
+    "                  \"lw4over6-bind-prefix-len\": 56"
+    "              }"
+    "            }"
+    "        ],"
+    "        \"subnet\": \"2001:db8::/32\""
+    "     } ]"
+    "}",
+
+    // Last configuration for comments
+    "{"
+    "    \"comment\": \"A DHCPv6 server\","
+    "    \"server-id\": {"
+    "        \"comment\": \"DHCPv6 specific\","
+    "        \"type\": \"LL\""
+    "    },"
+    "    \"interfaces-config\": {"
+    "        \"comment\": \"Use wildcard\","
+    "        \"interfaces\": [ \"*\" ] },"
+    "    \"option-def\": [ {"
+    "        \"comment\": \"An option definition\","
+    "        \"name\": \"foo\","
+    "        \"code\": 100,"
+    "        \"type\": \"ipv6-address\","
+    "        \"space\": \"isc\""
+    "     } ],"
+    "    \"option-data\": [ {"
+    "        \"comment\": \"Set option value\","
+    "        \"name\": \"subscriber-id\","
+    "        \"data\": \"ABCDEF0105\","
+    "            \"csv-format\": false"
+    "     } ],"
+    "    \"client-classes\": ["
+    "        {"
+    "           \"comment\": \"match all\","
+    "           \"name\": \"all\","
+    "           \"test\": \"'' == ''\""
+    "        },"
+    "        {"
+    "           \"name\": \"none\""
+    "        },"
+    "        {"
+    "           \"comment\": \"a comment\","
+    "           \"name\": \"both\","
+    "           \"user-context\": {"
+    "               \"version\": 1"
+    "           }"
+    "        }"
+    "        ],"
+    "    \"control-socket\": {"
+    "        \"socket-type\": \"unix\","
+    "        \"socket-name\": \"/tmp/kea6-ctrl-socket\","
+    "        \"user-context\": { \"comment\": \"Indirect comment\" }"
+    "    },"
+    "    \"shared-networks\": [ {"
+    "        \"comment\": \"A shared network\","
+    "        \"name\": \"foo\","
+    "        \"subnet6\": ["
+    "        { "
+    "            \"comment\": \"A subnet\","
+    "            \"subnet\": \"2001:db1::/48\","
+    "            \"id\": 100,"
+    "            \"pools\": ["
+    "            {"
+    "                 \"comment\": \"A pool\","
+    "                 \"pool\": \"2001:db1::/64\""
+    "            }"
+    "            ],"
+    "            \"pd-pools\": ["
+    "            {"
+    "                 \"comment\": \"A prefix pool\","
+    "                 \"prefix\": \"2001:db2::\","
+    "                 \"prefix-len\": 48,"
+    "                 \"delegated-len\": 64"
+    "            }"
+    "            ],"
+    "            \"reservations\": ["
+    "            {"
+    "                 \"comment\": \"A host reservation\","
+    "                 \"hw-address\": \"AA:BB:CC:DD:EE:FF\","
+    "                 \"hostname\": \"foo.example.com\","
+    "                 \"option-data\": [ {"
+    "                     \"comment\": \"An option in a reservation\","
+    "                     \"name\": \"domain-search\","
+    "                     \"data\": \"example.com\""
+    "                 } ]"
+    "            }"
+    "            ]"
+    "        }"
+    "        ]"
+    "     } ],"
+    "    \"dhcp-ddns\": {"
+    "        \"comment\": \"No dynamic DNS\","
+    "        \"enable-updates\": false"
+    "    }"
+    "}"
+};
 
 class Dhcp6ParserTest : public ::testing::Test {
 protected:
@@ -121,6 +352,71 @@ public:
         ASSERT_TRUE(status);
         comment_ = parseAnswer(rcode_, status);
         EXPECT_EQ(expected_code, rcode_);
+        if (expected_code != rcode_) {
+            cout << "The comment returned was: [" << comment_->stringValue() << "]" << endl;
+        }
+    }
+
+    /// @brief Convenience method for running configuration
+    ///
+    /// This method does not throw, but signals errors using gtest macros.
+    ///
+    /// @param config text to be parsed as JSON
+    /// @param expected_code expected code (see cc/command_interpreter.h)
+    /// @param exp_error expected text error (check skipped if empty)
+    void configure(std::string config, int expected_code,
+                   std::string exp_error = "") {
+        ConstElementPtr json;
+        ASSERT_NO_THROW(json = parseDHCP6(config, true));
+
+        ConstElementPtr status;
+        EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
+        ASSERT_TRUE(status);
+
+        int rcode;
+        ConstElementPtr comment = parseAnswer(rcode, status);
+        EXPECT_EQ(expected_code, rcode);
+
+        string text;
+        ASSERT_NO_THROW(text = comment->stringValue());
+
+        if (expected_code != rcode) {
+            std::cout << "Reported status: " << text << std::endl;
+        }
+
+        if ((rcode != 0)) {
+            if (!exp_error.empty()) {
+                EXPECT_EQ(exp_error, text);
+            }
+        }
+    }
+
+    /// @brief Checks if specified subnet is part of the collection
+    ///
+    /// @param col collection of subnets to be inspected
+    /// @param subnet text notation (e.g. 192.0.2.0/24)
+    /// @param t1 expected renew-timer value
+    /// @param t2 expected rebind-timer value
+    /// @param preferred expected preferred-lifetime value
+    /// @param valid expected valid-lifetime value
+    /// @return the subnet that was examined
+    Subnet6Ptr
+    checkSubnet(const Subnet6Collection& col, std::string subnet,
+                uint32_t t1, uint32_t t2, uint32_t pref, uint32_t valid) {
+        const auto& index = col.get<SubnetPrefixIndexTag>();
+        auto subnet_it = index.find(subnet);
+        if (subnet_it == index.cend()) {
+            ADD_FAILURE() << "Unable to find expected subnet " << subnet;
+            return (Subnet6Ptr());
+        }
+        Subnet6Ptr s = *subnet_it;
+
+        EXPECT_EQ(t1, s->getT1());
+        EXPECT_EQ(t2, s->getT2());
+        EXPECT_EQ(pref, s->getPreferred());
+        EXPECT_EQ(valid, s->getValid());
+
+        return (s);
     }
 
     /// @brief Returns an interface configuration used by the most of the
@@ -146,31 +442,31 @@ public:
         std::map<std::string, std::string> params;
         if (parameter == "name") {
             params["name"] = param_value;
-            params["space"] = "dhcp6";
+            params["space"] = DHCP6_OPTION_SPACE;
             params["code"] = "38";
             params["data"] = "ABCDEF0105";
-            params["csv-format"] = "False";
+            params["csv-format"] = "false";
         } else if (parameter == "space") {
             params["name"] = "subscriber-id";
             params["space"] = param_value;
             params["code"] = "38";
             params["data"] = "ABCDEF0105";
-            params["csv-format"] = "False";
+            params["csv-format"] = "false";
         } else if (parameter == "code") {
             params["name"] = "subscriber-id";
-            params["space"] = "dhcp6";
+            params["space"] = DHCP6_OPTION_SPACE;
             params["code"] = param_value;
             params["data"] = "ABCDEF0105";
-            params["csv-format"] = "False";
+            params["csv-format"] = "false";
         } else if (parameter == "data") {
             params["name"] = "subscriber-id";
-            params["space"] = "dhcp6";
+            params["space"] = DHCP6_OPTION_SPACE;
             params["code"] = "38";
             params["data"] = param_value;
-            params["csv-format"] = "False";
+            params["csv-format"] = "false";
         } else if (parameter == "csv-format") {
             params["name"] = "subscriber-id";
-            params["space"] = "dhcp6";
+            params["space"] = DHCP6_OPTION_SPACE;
             params["code"] = "38";
             params["data"] = "ABCDEF0105";
             params["csv-format"] = param_value;
@@ -254,13 +550,13 @@ public:
         Subnet6Ptr subnet = CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->
             selectSubnet(subnet_address, classify_);
         if (!subnet) {
-            /// @todo replace toText() with the use of operator <<.
             ADD_FAILURE() << "A subnet for the specified address "
-                          << subnet_address.toText()
+                          << subnet_address
                           << " does not exist in Config Manager";
+            return (OptionDescriptor(false));
         }
         OptionContainerPtr options =
-            subnet->getCfgOption()->getAll("dhcp6");
+            subnet->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
         if (expected_options_count != options->size()) {
             ADD_FAILURE() << "The number of options in the subnet '"
                           << subnet_address.toText() << "' is different "
@@ -302,9 +598,10 @@ public:
     ///         latter case, a failure will have been added to the current test.
     bool
     executeConfiguration(const std::string& config, const char* operation) {
+        ConstElementPtr json;
         ConstElementPtr status;
         try {
-            ElementPtr json = Element::fromJSON(config);
+            json = parseJSON(config);
             status = configureDhcp6Server(srv_, json);
 
         } catch (const std::exception& ex) {
@@ -367,8 +664,6 @@ public:
         // all interfaces before each test and later check that this setting
         // has been overridden by the configuration used in the test.
         CfgMgr::instance().clear();
-        // Create fresh context.
-        globalContext()->copyContext(ParserContext(Option::V6));
     }
 
     /// @brief Retrieve an option associated with a host.
@@ -383,7 +678,7 @@ public:
     template<typename ReturnType>
     ReturnType
     retrieveOption(const Host& host, const uint16_t option_code) const {
-        return (retrieveOption<ReturnType>(host, "dhcp6", option_code));
+        return (retrieveOption<ReturnType>(host, DHCP6_OPTION_SPACE, option_code));
     }
 
     /// @brief Retrieve an option associated with a host.
@@ -424,14 +719,14 @@ public:
                                 const std::string& parameter) {
         ConstElementPtr x;
         std::string config = createConfigWithOption(param_value, parameter);
-        ElementPtr json = Element::fromJSON(config);
+        ConstElementPtr json = parseDHCP6(config);
         EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
         checkResult(x, 1);
         EXPECT_TRUE(errorContainsPosition(x, "<string>"));
         CfgMgr::instance().clear();
     }
 
-    /// @brief Test invalid option paramater value.
+    /// @brief Test invalid option parameter value.
     ///
     /// This test function constructs the simple configuration
     /// string and injects invalid option configuration into it.
@@ -442,7 +737,7 @@ public:
     testInvalidOptionParam(const std::map<std::string, std::string>& params) {
         ConstElementPtr x;
         std::string config = createConfigWithOption(params);
-        ElementPtr json = Element::fromJSON(config);
+        ConstElementPtr json = parseDHCP6(config);
         EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
         checkResult(x, 1);
         EXPECT_TRUE(errorContainsPosition(x, "<string>"));
@@ -543,7 +838,7 @@ public:
         CfgMgr::instance().clear();
 
         // Configure the server.
-        ElementPtr json = Element::fromJSON(config);
+        ConstElementPtr json = parseDHCP6(config);
 
         // Make sure that the configuration was successful.
         ConstElementPtr status;
@@ -562,27 +857,45 @@ public:
         CfgMgr::instance().clear();
     }
 
-    int rcode_;          ///< Return code (see @ref isc::config::parseAnswer)
-    Dhcpv6Srv srv_;      ///< Instance of the Dhcp6Srv used during tests
+    /// @brief This utility method attempts to configure using specified
+    ///        config and then returns requested pool from requested subnet
+    ///
+    /// @param config configuration to be applied
+    /// @param subnet_index index of the subnet to be returned (0 - the first subnet)
+    /// @param pool_index index of the pool within a subnet (0 - the first pool)
+    /// @param type Pool type (TYPE_NA or TYPE_PD)
+    /// @param pool [out] Pool pointer will be stored here (if found)
+    void getPool(const std::string& config, size_t subnet_index,
+                 size_t pool_index, Lease::Type type, PoolPtr& pool) {
+        ConstElementPtr status;
+        ConstElementPtr json;
+
+        EXPECT_NO_THROW(json = parseDHCP6(config, true));
+        EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
+        ASSERT_TRUE(status);
+        checkResult(status, 0);
+
+        ConstCfgSubnets6Ptr subnets6 = CfgMgr::instance().getStagingCfg()->getCfgSubnets6();
+        ASSERT_TRUE(subnets6);
+
+        const Subnet6Collection* subnets = subnets6->getAll();
+        ASSERT_TRUE(subnets);
+        ASSERT_GE(subnets->size(), subnet_index + 1);
+
+        const PoolCollection pools = subnets->at(subnet_index)->getPools(type);
+        ASSERT_GE(pools.size(), pool_index + 1);
+
+        pool = pools.at(pool_index);
+        EXPECT_TRUE(pool);
+    }
+
+    int rcode_; ///< Return code (see @ref isc::config::parseAnswer)
+    ControlledDhcpv6Srv srv_; ///< Instance of the ControlledDhcp6Srv used during tests
     ConstElementPtr comment_; ///< Comment (see @ref isc::config::parseAnswer)
     string valid_iface_; ///< Valid network interface name (present in system)
     string bogus_iface_; ///< invalid network interface name (not in system)
     isc::dhcp::ClientClasses classify_; ///< used in client classification
 };
-
-// Goal of this test is a verification if a very simple config update
-// with just a bumped version number. That's the simplest possible
-// config update.
-TEST_F(Dhcp6ParserTest, version) {
-
-    ConstElementPtr x;
-
-    EXPECT_NO_THROW(x = configureDhcp6Server(srv_,
-                    Element::fromJSON("{\"version\": 0}")));
-
-    // returned value must be 0 (configuration accepted)
-    checkResult(x, 0);
-}
 
 /// The goal of this test is to verify that the code accepts only
 /// valid commands and malformed or unsupported parameters are rejected.
@@ -591,25 +904,49 @@ TEST_F(Dhcp6ParserTest, bogusCommand) {
     ConstElementPtr x;
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_,
-                    Element::fromJSON("{\"bogus\": 5}")));
+                    parseJSON("{\"bogus\": 5}")));
 
     // returned value must be 1 (configuration parse error)
     checkResult(x, 1);
+
+    // it should be refused by syntax too
+    EXPECT_THROW(parseDHCP6("{\"bogus\": 5}"), Dhcp6ParseError);
+}
+
+/// The goal of this test is to verify empty interface-config is accepted.
+TEST_F(Dhcp6ParserTest, emptyInterfaceConfig) {
+
+    ConstElementPtr json;
+    EXPECT_NO_THROW(json = parseDHCP6("{ \"preferred-lifetime\": 3000,"
+                                      "\"rebind-timer\": 2000, "
+                                      "\"renew-timer\": 1000, "
+                                      "\"valid-lifetime\": 4000 }"));
+
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
+
+    // returned value should be 0 (success)
+    checkResult(status, 0);
 }
 
 /// The goal of this test is to verify if configuration without any
 /// subnets defined can be accepted.
 TEST_F(Dhcp6ParserTest, emptySubnet) {
 
-    ConstElementPtr status;
+    string config = "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [  ], "
+        "\"valid-lifetime\": 4000 }";
 
-    EXPECT_NO_THROW(status = configureDhcp6Server(srv_,
-                    Element::fromJSON("{ " + genIfaceConfig() + ","
-                                      "\"preferred-lifetime\": 3000,"
-                                      "\"rebind-timer\": 2000, "
-                                      "\"renew-timer\": 1000, "
-                                      "\"subnet6\": [  ], "
-                                      "\"valid-lifetime\": 4000 }")));
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
+
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
+
 
     // returned value should be 0 (success)
     checkResult(status, 0);
@@ -618,8 +955,6 @@ TEST_F(Dhcp6ParserTest, emptySubnet) {
 /// The goal of this test is to verify if defined subnet uses global
 /// parameter timer definitions.
 TEST_F(Dhcp6ParserTest, subnetGlobalDefaults) {
-
-    ConstElementPtr status;
 
     string config = "{ " + genIfaceConfig() + ","
         "\"preferred-lifetime\": 3000,"
@@ -630,8 +965,11 @@ TEST_F(Dhcp6ParserTest, subnetGlobalDefaults) {
         "    \"subnet\": \"2001:db8:1::/64\" } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // check if returned status is OK
@@ -681,7 +1019,9 @@ TEST_F(Dhcp6ParserTest, multipleSubnets) {
 
     int cnt = 0; // Number of reconfigurations
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     do {
         EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
@@ -739,7 +1079,9 @@ TEST_F(Dhcp6ParserTest, multipleSubnetsExplicitIDs) {
 
     int cnt = 0; // Number of reconfigurations
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     do {
         EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
@@ -764,7 +1106,7 @@ TEST_F(Dhcp6ParserTest, multipleSubnetsExplicitIDs) {
 }
 
 // CHeck that the configuration with two subnets having the same id is rejected.
-TEST_F(Dhcp6ParserTest, multipleSubnetsOverlapingIDs) {
+TEST_F(Dhcp6ParserTest, multipleSubnetsOverlappingIDs) {
     ConstElementPtr x;
     // Four subnets, two of them have the same id.
     string config = "{ " + genIfaceConfig() + ","
@@ -793,7 +1135,8 @@ TEST_F(Dhcp6ParserTest, multipleSubnetsOverlapingIDs) {
         " } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 1);
@@ -880,7 +1223,9 @@ TEST_F(Dhcp6ParserTest, reconfigureRemoveSubnet) {
     // CASE 1: Configure 4 subnets, then reconfigure and remove the
     // last one.
 
-    ElementPtr json = Element::fromJSON(config4);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config4));
+    extractConfig(config4);
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
 
@@ -892,7 +1237,7 @@ TEST_F(Dhcp6ParserTest, reconfigureRemoveSubnet) {
     ASSERT_EQ(4, subnets->size()); // We expect 4 subnets
 
     // Do the reconfiguration (the last subnet is removed)
-    json = Element::fromJSON(config_first3);
+    ASSERT_NO_THROW(json = parseDHCP6(config_first3));
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
 
@@ -909,14 +1254,14 @@ TEST_F(Dhcp6ParserTest, reconfigureRemoveSubnet) {
     /// CASE 2: Configure 4 subnets, then reconfigure and remove one
     /// from in between (not first, not last)
 
-    json = Element::fromJSON(config4);
+    ASSERT_NO_THROW(json = parseDHCP6(config4));
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
 
     CfgMgr::instance().commit();
 
     // Do reconfiguration
-    json = Element::fromJSON(config_second_removed);
+    ASSERT_NO_THROW(json = parseDHCP6(config_second_removed));
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
 
@@ -938,8 +1283,6 @@ TEST_F(Dhcp6ParserTest, reconfigureRemoveSubnet) {
 // on a per subnet basis.
 TEST_F(Dhcp6ParserTest, subnetLocal) {
 
-    ConstElementPtr status;
-
     string config = "{ " + genIfaceConfig() + ","
         "\"preferred-lifetime\": 3000,"
         "\"rebind-timer\": 2000, "
@@ -953,8 +1296,11 @@ TEST_F(Dhcp6ParserTest, subnetLocal) {
         "    \"subnet\": \"2001:db8:1::/64\" } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value should be 0 (configuration success)
@@ -973,23 +1319,26 @@ TEST_F(Dhcp6ParserTest, subnetLocal) {
 // interface defined.
 TEST_F(Dhcp6ParserTest, subnetInterface) {
 
-    ConstElementPtr status;
-
     // There should be at least one interface
+    // As far as I can tell, this is the first lambda in Kea code. Cool.
+    auto config = [this](string iface) {
+        return ("{ " + genIfaceConfig() + ","
+                "\"preferred-lifetime\": 3000,"
+                "\"rebind-timer\": 2000, "
+                "\"renew-timer\": 1000, "
+                "\"subnet6\": [ { "
+                "    \"pools\": [ { "
+                "        \"pool\": \"2001:db8:1::1 - 2001:db8:1::ffff\" } ],"
+                "    \"interface\": \"" + iface + "\","
+                "    \"subnet\": \"2001:db8:1::/64\" } ],"
+                "\"valid-lifetime\": 4000 }"); };
+    cout << config(valid_iface_) << endl;
 
-    string config = "{ " + genIfaceConfig() + ","
-        "\"preferred-lifetime\": 3000,"
-        "\"rebind-timer\": 2000, "
-        "\"renew-timer\": 1000, "
-        "\"subnet6\": [ { "
-        "    \"pools\": [ { \"pool\": \"2001:db8:1::1 - 2001:db8:1::ffff\" } ],"
-        "    \"interface\": \"" + valid_iface_ + "\","
-        "    \"subnet\": \"2001:db8:1::/64\" } ],"
-        "\"valid-lifetime\": 4000 }";
-    cout << config << endl;
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config(valid_iface_)));
+    extractConfig(config("eth0"));
 
-    ElementPtr json = Element::fromJSON(config);
-
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value should be 0 (configuration success)
@@ -1005,8 +1354,6 @@ TEST_F(Dhcp6ParserTest, subnetInterface) {
 // Subnet6 definition.
 TEST_F(Dhcp6ParserTest, subnetInterfaceBogus) {
 
-    ConstElementPtr status;
-
     // There should be at least one interface
 
     string config = "{ " + genIfaceConfig() + ","
@@ -1020,8 +1367,10 @@ TEST_F(Dhcp6ParserTest, subnetInterfaceBogus) {
         "\"valid-lifetime\": 4000 }";
     cout << config << endl;
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value should be 1 (configuration error)
@@ -1038,8 +1387,6 @@ TEST_F(Dhcp6ParserTest, subnetInterfaceBogus) {
 // parameter.
 TEST_F(Dhcp6ParserTest, interfaceGlobal) {
 
-    ConstElementPtr status;
-
     string config = "{ " + genIfaceConfig() + ","
         "\"preferred-lifetime\": 3000,"
         "\"rebind-timer\": 2000, "
@@ -1051,13 +1398,16 @@ TEST_F(Dhcp6ParserTest, interfaceGlobal) {
         "\"valid-lifetime\": 4000 }";
     cout << config << endl;
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json = parseJSON(config);
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value should be 1 (parse error)
     checkResult(status, 1);
     EXPECT_TRUE(errorContainsPosition(status, "<string>"));
+
+    EXPECT_THROW(parseDHCP6(config), Dhcp6ParseError);
 }
 
 
@@ -1080,7 +1430,9 @@ TEST_F(Dhcp6ParserTest, subnetInterfaceId) {
         "    \"subnet\": \"2001:db8:1::/64\" } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
@@ -1121,7 +1473,7 @@ TEST_F(Dhcp6ParserTest, interfaceIdGlobal) {
         "    \"subnet\": \"2001:db8:1::/64\" } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json = parseJSON(config);
 
     ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
@@ -1129,6 +1481,8 @@ TEST_F(Dhcp6ParserTest, interfaceIdGlobal) {
     // Returned value should be 1 (parse error)
     checkResult(status, 1);
     EXPECT_TRUE(errorContainsPosition(status, "<string>"));
+
+    EXPECT_THROW(parseDHCP6(config), Dhcp6ParseError);
 }
 
 // This test checks if it is not possible to define a subnet with an
@@ -1145,7 +1499,8 @@ TEST_F(Dhcp6ParserTest, subnetInterfaceAndInterfaceId) {
         "    \"subnet\": \"2001:db8:1::/64\" } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
 
     ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
@@ -1181,7 +1536,7 @@ TEST_F(Dhcp6ParserTest, subnetRapidCommit) {
                         "\"subnet6\": [ { "
                         "    \"pools\": [ { \"pool\": \"2001:db8:1::1 - "
                         "2001:db8:1::ffff\" } ],"
-                        "    \"rapid-commit\": True,"
+                        "    \"rapid-commit\": true,"
                         "    \"subnet\": \"2001:db8:1::/64\" } ],"
                         "\"valid-lifetime\": 4000 }",
                         true);
@@ -1196,7 +1551,7 @@ TEST_F(Dhcp6ParserTest, subnetRapidCommit) {
                         "\"subnet6\": [ { "
                         "    \"pools\": [ { \"pool\": \"2001:db8:1::1 - "
                         "2001:db8:1::ffff\" } ],"
-                        "    \"rapid-commit\": False,"
+                        "    \"rapid-commit\": false,"
                         "    \"subnet\": \"2001:db8:1::/64\" } ],"
                         "\"valid-lifetime\": 4000 }",
                         false);
@@ -1226,8 +1581,9 @@ TEST_F(Dhcp6ParserTest, multiplePools) {
         "    \"subnet\": \"2001:db8:2::/64\""
         " } ],"
         "\"valid-lifetime\": 4000 }";
-    ElementPtr json;
-    ASSERT_NO_THROW(json = Element::fromJSON(config));
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     ConstElementPtr status;
     ASSERT_NO_THROW(status = configureDhcp6Server(srv_, json));
@@ -1266,8 +1622,6 @@ TEST_F(Dhcp6ParserTest, multiplePools) {
 // pool are rejected.
 TEST_F(Dhcp6ParserTest, poolOutOfSubnet) {
 
-    ConstElementPtr status;
-
     string config = "{ " + genIfaceConfig() + ","
         "\"preferred-lifetime\": 3000,"
         "\"rebind-timer\": 2000, "
@@ -1278,8 +1632,10 @@ TEST_F(Dhcp6ParserTest, poolOutOfSubnet) {
         "\"valid-lifetime\": 4000 }";
 
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value must be 1 (values error)
@@ -1306,7 +1662,9 @@ TEST_F(Dhcp6ParserTest, poolPrefixLen) {
         "    \"subnet\": \"2001:db8:1::/64\" } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
 
@@ -1320,6 +1678,139 @@ TEST_F(Dhcp6ParserTest, poolPrefixLen) {
     EXPECT_EQ(2000, subnet->getT2());
     EXPECT_EQ(3000, subnet->getPreferred());
     EXPECT_EQ(4000, subnet->getValid());
+}
+
+// Goal of this test is to verify if invalid pool definitions
+// return a location in the error message.
+TEST_F(Dhcp6ParserTest, badPools) {
+
+    // not a prefix
+    string config_bogus1 = "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [ { "
+        "    \"pools\": [ { \"pool\": \"foo/80\" } ],"
+        "    \"subnet\": \"2001:db8:1::/64\" } ],"
+        "\"valid-lifetime\": 4000 }";
+
+    // not a length
+    string config_bogus2 = "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [ { "
+        "    \"pools\": [ { \"pool\": \"2001:db8:1::/foo\" } ],"
+        "    \"subnet\": \"2001:db8:1::/64\" } ],"
+        "\"valid-lifetime\": 4000 }";
+
+    // invalid prefix length
+    string config_bogus3 = "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [ { "
+        "    \"pools\": [ { \"pool\": \"2001:db8:1::/200\" } ],"
+        "    \"subnet\": \"2001:db8:1::/64\" } ],"
+        "\"valid-lifetime\": 4000 }";
+
+    // not a prefix nor a min-max
+    string config_bogus4 = "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [ { "
+        "    \"pools\": [ { \"pool\": \"foo\" } ],"
+        "    \"subnet\": \"2001:db8:1::/64\" } ],"
+        "\"valid-lifetime\": 4000 }";
+
+    // not an address
+    string config_bogus5 = "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [ { "
+        "    \"pools\": [ { \"pool\": \"foo - bar\" } ],"
+        "    \"subnet\": \"2001:db8:1::/64\" } ],"
+        "\"valid-lifetime\": 4000 }";
+
+    // min > max
+    string config_bogus6 = "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [ { "
+        "    \"pools\": [ { \"pool\": \"2001:db8:1::ffff - 2001:db8:1::\" } ],"
+        "    \"subnet\": \"2001:db8:1::/64\" } ],"
+        "\"valid-lifetime\": 4000 }";
+
+    // out of range prefix length (new check)
+    string config_bogus7 = "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [ { "
+        "    \"pools\": [ { \"pool\": \"2001:db8:1::/1104\" } ],"
+        "    \"subnet\": \"2001:db8:1::/64\" } ],"
+        "\"valid-lifetime\": 4000 }";
+
+    ConstElementPtr json1;
+    ASSERT_NO_THROW(json1 = parseDHCP6(config_bogus1));
+    ConstElementPtr json2;
+    ASSERT_NO_THROW(json2 = parseDHCP6(config_bogus2));
+    ConstElementPtr json3;
+    ASSERT_NO_THROW(json3 = parseDHCP6(config_bogus3));
+    ConstElementPtr json4;
+    ASSERT_NO_THROW(json4 = parseDHCP6(config_bogus4));
+    ConstElementPtr json5;
+    ASSERT_NO_THROW(json5 = parseDHCP6(config_bogus5));
+    ConstElementPtr json6;
+    ASSERT_NO_THROW(json6 = parseDHCP6(config_bogus6));
+    ConstElementPtr json7;
+    ASSERT_NO_THROW(json7 = parseDHCP6(config_bogus7));
+
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json1));
+
+    // check if returned status is always a failure
+    checkResult(status, 1);
+    EXPECT_TRUE(errorContainsPosition(status, "<string>"));
+
+    CfgMgr::instance().clear();
+
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json2));
+    checkResult(status, 1);
+    EXPECT_TRUE(errorContainsPosition(status, "<string>"));
+
+    CfgMgr::instance().clear();
+
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json3));
+    checkResult(status, 1);
+    EXPECT_TRUE(errorContainsPosition(status, "<string>"));
+
+    CfgMgr::instance().clear();
+
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json4));
+    checkResult(status, 1);
+    EXPECT_TRUE(errorContainsPosition(status, "<string>"));
+
+    CfgMgr::instance().clear();
+
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json5));
+    checkResult(status, 1);
+    EXPECT_TRUE(errorContainsPosition(status, "<string>"));
+
+    CfgMgr::instance().clear();
+
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json6));
+    checkResult(status, 1);
+    EXPECT_TRUE(errorContainsPosition(status, "<string>"));
+
+    CfgMgr::instance().clear();
+
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json7));
+    checkResult(status, 1);
+    EXPECT_TRUE(errorContainsPosition(status, "<string>"));
 }
 
 // Goal of this test is to verify the basic parsing of a prefix delegation
@@ -1345,8 +1836,9 @@ TEST_F(Dhcp6ParserTest, pdPoolBasics) {
         "] }";
 
     // Convert the JSON string into Elements.
-    ElementPtr json;
-    ASSERT_NO_THROW(json = Element::fromJSON(config));
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     // Verify that DHCP6 configuration processing succeeds.
     // Returned value must be non-empty ConstElementPtr to config result.
@@ -1376,6 +1868,70 @@ TEST_F(Dhcp6ParserTest, pdPoolBasics) {
     // value.
     isc::asiolink::IOAddress prefixAddress("2001:db8:1::");
     EXPECT_EQ(lastAddrInPrefix(prefixAddress, 64), p6->getLastAddress());
+}
+
+// This test verifies that it is possible to specify a prefix pool with an
+// excluded prefix (see RFC6603).
+TEST_F(Dhcp6ParserTest, pdPoolPrefixExclude) {
+
+    ConstElementPtr x;
+
+    // Define a single valid pd pool.
+    string config =
+        "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [ { "
+        "    \"subnet\": \"2001:db8:1::/64\","
+        "    \"pd-pools\": ["
+        "        { \"prefix\": \"3000::\", "
+        "          \"prefix-len\": 48, "
+        "          \"delegated-len\": 64,"
+        "          \"excluded-prefix\": \"3000:0:0:0:1000::\","
+        "          \"excluded-prefix-len\": 72"
+        "        } ],"
+        "\"valid-lifetime\": 4000 }"
+        "] }";
+
+    // Convert the JSON string into Elements.
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
+
+    // Verify that DHCP6 configuration processing succeeds.
+    // Returned value must be non-empty ConstElementPtr to config result.
+    // rcode should be 0 which indicates successful configuration processing.
+    EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
+    checkResult(x, 0);
+
+    // Test that we can retrieve the subnet.
+    Subnet6Ptr subnet = CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->
+        selectSubnet(IOAddress("2001:db8:1::5"), classify_);
+    ASSERT_TRUE(subnet);
+
+    // Fetch the collection of PD pools.  It should have 1 entry.
+    PoolCollection pc;
+    ASSERT_NO_THROW(pc = subnet->getPools(Lease::TYPE_PD));
+    EXPECT_EQ(1, pc.size());
+
+    // Get a pointer to the pd pool instance, and verify its contents.
+    Pool6Ptr p6;
+    ASSERT_NO_THROW(p6 = boost::dynamic_pointer_cast<Pool6>(pc[0]));
+    ASSERT_TRUE(p6);
+    EXPECT_EQ("3000::", p6->getFirstAddress().toText());
+    EXPECT_EQ(64, p6->getLength());
+
+    // This pool should have Prefix Exclude option associated.
+    Option6PDExcludePtr pd_exclude_option = p6->getPrefixExcludeOption();
+    ASSERT_TRUE(pd_exclude_option);
+
+    // Pick a delegated prefix of 3000:0:0:3:1000::/64 which belongs to our
+    // pool of 3000::/48. For this prefix obtain a Prefix Exclude option and
+    // verify that it is correct.
+    EXPECT_EQ("3000:0:0:3:1000::",
+              pd_exclude_option->getExcludedPrefix(IOAddress("3000:0:0:3::"), 64).toText());
+    EXPECT_EQ(72, static_cast<unsigned>(pd_exclude_option->getExcludedPrefixLength()));
 }
 
 // Goal of this test is verify that a list of PD pools can be configured.
@@ -1420,8 +1976,9 @@ TEST_F(Dhcp6ParserTest, pdPoolList) {
         "] }";
 
     // Convert the JSON string into Elements.
-    ElementPtr json = Element::fromJSON(config);
-    ASSERT_NO_THROW(json = Element::fromJSON(config));
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     // Verify that DHCP6 configuration processing succeeds.
     // Returned value must be non-empty ConstElementPtr to config result.
@@ -1476,8 +2033,9 @@ TEST_F(Dhcp6ParserTest, subnetAndPrefixDelegated) {
         "] }";
 
     // Convert the JSON string into Elements.
-    ElementPtr json;
-    ASSERT_NO_THROW(json = Element::fromJSON(config));
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     // Verify that DHCP6 configuration processing succeeds.
     // Returned value must be non-empty ConstElementPtr to config result.
@@ -1520,7 +2078,7 @@ TEST_F(Dhcp6ParserTest, invalidPdPools) {
 
     const char *config[] =  {
         // No prefix.
-        "{ \"interfaces-config\": { },"
+        "{ \"interfaces-config\": { \"interfaces\": [ ] },"
         "\"preferred-lifetime\": 3000,"
         "\"rebind-timer\": 2000, "
         "\"renew-timer\": 1000, "
@@ -1534,7 +2092,7 @@ TEST_F(Dhcp6ParserTest, invalidPdPools) {
         "\"valid-lifetime\": 4000 }"
         "] }",
         // No prefix-len.
-        "{ \"interfaces-config\": { },"
+        "{ \"interfaces-config\": { \"interfaces\": [ ] },"
         "\"preferred-lifetime\": 3000,"
         "\"rebind-timer\": 2000, "
         "\"renew-timer\": 1000, "
@@ -1547,7 +2105,7 @@ TEST_F(Dhcp6ParserTest, invalidPdPools) {
         "\"valid-lifetime\": 4000 }"
         "] }",
         // No delegated-len.
-        "{ \"interfaces-config\": { },"
+        "{ \"interfaces-config\": { \"interfaces\": [ ] },"
         "\"preferred-lifetime\": 3000,"
         "\"rebind-timer\": 2000, "
         "\"renew-timer\": 1000, "
@@ -1560,7 +2118,7 @@ TEST_F(Dhcp6ParserTest, invalidPdPools) {
         "\"valid-lifetime\": 4000 }"
         "] }",
         // Delegated length is too short.
-        "{ \"interfaces-config\": { },"
+        "{ \"interfaces-config\": { \"interfaces\": [ ] },"
         "\"preferred-lifetime\": 3000,"
         "\"rebind-timer\": 2000, "
         "\"renew-timer\": 1000, "
@@ -1575,11 +2133,17 @@ TEST_F(Dhcp6ParserTest, invalidPdPools) {
         "] }"
         };
 
-    ElementPtr json;
+    ConstElementPtr json;
     int num_msgs = sizeof(config)/sizeof(char*);
     for (unsigned int i = 0; i < num_msgs; i++) {
         // Convert JSON string to Elements.
-        ASSERT_NO_THROW(json = Element::fromJSON(config[i]));
+        // The 3 first configs should fail to parse.
+        if (i < 3) {
+            EXPECT_THROW(parseDHCP6(config[i]), Dhcp6ParseError);
+            json = parseJSON(config[i]);
+        } else {
+            ASSERT_NO_THROW(json = parseDHCP6(config[i]));
+        }
 
         // Configuration processing should fail without a throw.
         ASSERT_NO_THROW(x = configureDhcp6Server(srv_, json));
@@ -1604,7 +2168,9 @@ TEST_F(Dhcp6ParserTest, optionDefIpv6Address) {
         "      \"space\": \"isc\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
+    extractConfig(config);
 
     // Make sure that the particular option definition does not exist.
     OptionDefinitionPtr def = CfgMgr::instance().getStagingCfg()->
@@ -1643,9 +2209,8 @@ TEST_F(Dhcp6ParserTest, optionDefIpv6Address) {
 
     // Let's apply empty configuration. This removes the option definitions
     // configuration and should result in removal of the option 100 from the
-    // libdhcp++.
-    config = "{ }";
-    json = Element::fromJSON(config);
+    // libdhcp++. Note DHCP6 or OPTION_DEFS parsers do not accept empty maps.
+    json.reset(new MapElement());
     ASSERT_NO_THROW(status = configureDhcp6Server(srv_, json));
     checkResult(status, 0);
 
@@ -1667,7 +2232,9 @@ TEST_F(Dhcp6ParserTest, optionDefRecord) {
         "      \"space\": \"isc\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
+    extractConfig(config);
 
     // Make sure that the particular option definition does not exist.
     OptionDefinitionPtr def = CfgMgr::instance().getStagingCfg()->
@@ -1719,7 +2286,9 @@ TEST_F(Dhcp6ParserTest, optionDefMultiple) {
         "      \"space\": \"isc\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
+    extractConfig(config);
 
     // Make sure that the option definitions do not exist yet.
     ASSERT_FALSE(CfgMgr::instance().getStagingCfg()->
@@ -1785,7 +2354,8 @@ TEST_F(Dhcp6ParserTest, optionDefDuplicate) {
         "      \"space\": \"isc\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
 
     // Make sure that the option definition does not exist yet.
     ASSERT_FALSE(CfgMgr::instance().getStagingCfg()->
@@ -1819,11 +2389,13 @@ TEST_F(Dhcp6ParserTest, optionDefArray) {
         "      \"name\": \"foo\","
         "      \"code\": 100,"
         "      \"type\": \"uint32\","
-        "      \"array\": True,"
+        "      \"array\": true,"
         "      \"space\": \"isc\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
+    extractConfig(config);
 
     // Make sure that the particular option definition does not exist.
     OptionDefinitionPtr def = CfgMgr::instance().getStagingCfg()->
@@ -1862,7 +2434,9 @@ TEST_F(Dhcp6ParserTest, optionDefEncapsulate) {
         "      \"encapsulate\": \"sub-opts-space\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
+    extractConfig(config);
 
     // Make sure that the particular option definition does not exist.
     OptionDefinitionPtr def = CfgMgr::instance().getStagingCfg()->
@@ -1900,7 +2474,8 @@ TEST_F(Dhcp6ParserTest, optionDefInvalidName) {
         "      \"space\": \"isc\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
 
     // Use the configuration string to create new option definition.
     ConstElementPtr status;
@@ -1924,7 +2499,8 @@ TEST_F(Dhcp6ParserTest, optionDefInvalidType) {
         "      \"space\": \"isc\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
 
     // Use the configuration string to create new option definition.
     ConstElementPtr status;
@@ -1949,7 +2525,8 @@ TEST_F(Dhcp6ParserTest, optionDefInvalidRecordType) {
         "      \"space\": \"isc\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
 
     // Use the configuration string to create new option definition.
     ConstElementPtr status;
@@ -1959,6 +2536,32 @@ TEST_F(Dhcp6ParserTest, optionDefInvalidRecordType) {
     checkResult(status, 1);
     EXPECT_TRUE(errorContainsPosition(status, "<string>"));
 }
+
+/// The purpose of this test is to verify that various integer types
+/// are supported.
+TEST_F(Dhcp6ParserTest, optionIntegerTypes) {
+    // Configuration string. The third of the record fields
+    // is invalid. It is "sting" instead of "string".
+    std::string config =
+        "{ \"option-def\": [ {"
+        "      \"name\": \"foo\","
+        "      \"code\": 100,"
+        "      \"type\": \"record\","
+        "      \"record-types\": \"uint8,uint16,uint32,int8,int16,int32\","
+        "      \"space\": \"isc\""
+        "  } ]"
+        "}";
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
+
+    // Use the configuration string to create new option definition.
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
+    ASSERT_TRUE(status);
+    // Expecting parsing error (error code 1).
+    checkResult(status, 0);
+}
+
 
 /// The goal of this test is to verify that the invalid encapsulated
 /// option space name is not accepted.
@@ -1974,7 +2577,8 @@ TEST_F(Dhcp6ParserTest, optionDefInvalidEncapsulatedSpace) {
         "      \"encapsulate\": \"invalid%space%name\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
 
     // Use the configuration string to create new option definition.
     ConstElementPtr status;
@@ -1997,12 +2601,13 @@ TEST_F(Dhcp6ParserTest, optionDefEncapsulatedSpaceAndArray) {
         "      \"name\": \"foo\","
         "      \"code\": 100,"
         "      \"type\": \"uint32\","
-        "      \"array\": True,"
+        "      \"array\": true,"
         "      \"space\": \"isc\","
         "      \"encapsulate\": \"valid-space-name\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
 
     // Use the configuration string to create new option definition.
     ConstElementPtr status;
@@ -2027,7 +2632,8 @@ TEST_F(Dhcp6ParserTest, optionDefEncapsulateOwnSpace) {
         "      \"encapsulate\": \"isc\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
 
     // Use the configuration string to create new option definition.
     ConstElementPtr status;
@@ -2056,10 +2662,11 @@ TEST_F(Dhcp6ParserTest, optionStandardDefOverride) {
         "      \"space\": \"dhcp6\""
         "  } ]"
         "}";
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseOPTION_DEFS(config));
 
     OptionDefinitionPtr def = CfgMgr::instance().getStagingCfg()->
-        getCfgOptionDef()->get("dhcp6", 100);
+        getCfgOptionDef()->get(DHCP6_OPTION_SPACE, 100);
     ASSERT_FALSE(def);
 
     // Use the configuration string to create new option definition.
@@ -2070,7 +2677,7 @@ TEST_F(Dhcp6ParserTest, optionStandardDefOverride) {
 
     // The option definition should now be available in the CfgMgr.
     def = CfgMgr::instance().getStagingCfg()->
-        getCfgOptionDef()->get("dhcp6", 100);
+        getCfgOptionDef()->get(DHCP6_OPTION_SPACE, 100);
     ASSERT_TRUE(def);
 
     // Check the option data.
@@ -2090,7 +2697,7 @@ TEST_F(Dhcp6ParserTest, optionStandardDefOverride) {
         "      \"space\": \"dhcp6\""
         "  } ]"
         "}";
-    json = Element::fromJSON(config);
+    json = parseOPTION_DEFS(config);
 
     // Use the configuration string to create new option definition.
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
@@ -2112,7 +2719,7 @@ TEST_F(Dhcp6ParserTest, optionStandardDefOverride) {
         "      \"space\": \"dhcp6\""
         "  } ]"
         "}";
-    json = Element::fromJSON(config);
+    json = parseOPTION_DEFS(config);
 
     // Use the configuration string to create new option definition.
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
@@ -2121,7 +2728,7 @@ TEST_F(Dhcp6ParserTest, optionStandardDefOverride) {
     checkResult(status, 0);
 
     def = CfgMgr::instance().getStagingCfg()->
-        getCfgOptionDef()->get("dhcp6", 63);
+        getCfgOptionDef()->get(DHCP6_OPTION_SPACE, 63);
     ASSERT_TRUE(def);
 
     // Check the option data.
@@ -2141,7 +2748,7 @@ TEST_F(Dhcp6ParserTest, optionDataDefaultsGlobal) {
         "\"option-data\": [ {"
         "    \"name\": \"subscriber-id\","
         "    \"data\": \"ABCDEF0105\","
-        "    \"csv-format\": False"
+        "    \"csv-format\": false"
         " },"
         " {"
         "    \"name\": \"preference\","
@@ -2153,7 +2760,9 @@ TEST_F(Dhcp6ParserTest, optionDataDefaultsGlobal) {
         " } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
@@ -2162,10 +2771,10 @@ TEST_F(Dhcp6ParserTest, optionDataDefaultsGlobal) {
     Subnet6Ptr subnet = CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->
         selectSubnet(IOAddress("2001:db8:1::5"), classify_);
     ASSERT_TRUE(subnet);
-    OptionContainerPtr options = subnet->getCfgOption()->getAll("dhcp6");
+    OptionContainerPtr options = subnet->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
     ASSERT_EQ(0, options->size());
 
-    options = CfgMgr::instance().getStagingCfg()->getCfgOption()->getAll("dhcp6");
+    options = CfgMgr::instance().getStagingCfg()->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
     ASSERT_EQ(2, options->size());
 
     // Get the search index. Index #1 is to search using option code.
@@ -2215,7 +2824,7 @@ TEST_F(Dhcp6ParserTest, optionDataDefaultsSubnet) {
         "    \"option-data\": [ {"
         "        \"name\": \"subscriber-id\","
         "        \"data\": \"ABCDEF0105\","
-        "        \"csv-format\": False"
+        "        \"csv-format\": false"
         "     },"
         "     {"
         "        \"name\": \"preference\","
@@ -2224,20 +2833,22 @@ TEST_F(Dhcp6ParserTest, optionDataDefaultsSubnet) {
         " } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
 
     // These options are subnet options
     OptionContainerPtr options =
-        CfgMgr::instance().getStagingCfg()->getCfgOption()->getAll("dhcp6");
+        CfgMgr::instance().getStagingCfg()->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
     ASSERT_EQ(0, options->size());
 
     Subnet6Ptr subnet = CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->
         selectSubnet(IOAddress("2001:db8:1::5"), classify_);
     ASSERT_TRUE(subnet);
-    options = subnet->getCfgOption()->getAll("dhcp6");
+    options = subnet->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
     ASSERT_EQ(2, options->size());
 
     // Get the search index. Index #1 is to search using option code.
@@ -2294,7 +2905,7 @@ TEST_F(Dhcp6ParserTest, optionDataTwoSpaces) {
         "\"option-data\": [ {"
         "    \"name\": \"subscriber-id\","
         "    \"data\": \"ABCDEF0105\","
-        "    \"csv-format\": False"
+        "    \"csv-format\": false"
         " },"
         " {"
         "    \"name\": \"foo\","
@@ -2313,10 +2924,11 @@ TEST_F(Dhcp6ParserTest, optionDataTwoSpaces) {
         " } ]"
         "}";
 
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
+
     ConstElementPtr status;
-
-    ElementPtr json = Element::fromJSON(config);
-
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     ASSERT_TRUE(status);
     checkResult(status, 0);
@@ -2324,7 +2936,7 @@ TEST_F(Dhcp6ParserTest, optionDataTwoSpaces) {
     // Options should be now available
     // Try to get the option from the space dhcp6.
     OptionDescriptor desc1 =
-        CfgMgr::instance().getStagingCfg()->getCfgOption()->get("dhcp6", 38);
+        CfgMgr::instance().getStagingCfg()->getCfgOption()->get(DHCP6_OPTION_SPACE, 38);
     ASSERT_TRUE(desc1.option_);
     EXPECT_EQ(38, desc1.option_->getType());
     // Try to get the option from the space isc.
@@ -2389,10 +3001,11 @@ TEST_F(Dhcp6ParserTest, optionDataEncapsulate) {
         " } ]"
         "}";
 
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
+
     ConstElementPtr status;
-
-    ElementPtr json = Element::fromJSON(config);
-
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     ASSERT_TRUE(status);
     checkResult(status, 0);
@@ -2447,8 +3060,8 @@ TEST_F(Dhcp6ParserTest, optionDataEncapsulate) {
         " } ]"
         "}";
 
-
-    json = Element::fromJSON(config);
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     ASSERT_TRUE(status);
@@ -2456,17 +3069,17 @@ TEST_F(Dhcp6ParserTest, optionDataEncapsulate) {
 
     // We should have one option available.
     OptionContainerPtr options =
-        CfgMgr::instance().getStagingCfg()->getCfgOption()->getAll("dhcp6");
+        CfgMgr::instance().getStagingCfg()->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
     ASSERT_TRUE(options);
     ASSERT_EQ(1, options->size());
 
     // Get the option.
     OptionDescriptor desc =
-        CfgMgr::instance().getStagingCfg()->getCfgOption()->get("dhcp6", 100);
+        CfgMgr::instance().getStagingCfg()->getCfgOption()->get(DHCP6_OPTION_SPACE, 100);
     EXPECT_TRUE(desc.option_);
     EXPECT_EQ(100, desc.option_->getType());
 
-    // This opton should comprise two sub-options.
+    // This option should comprise two sub-options.
     // Onf of them is 'foo' with code 110.
     OptionPtr option_foo = desc.option_->getOption(110);
     ASSERT_TRUE(option_foo);
@@ -2492,7 +3105,7 @@ TEST_F(Dhcp6ParserTest, optionDataInMultipleSubnets) {
         "    \"option-data\": [ {"
         "          \"name\": \"subscriber-id\","
         "          \"data\": \"0102030405060708090A\","
-        "          \"csv-format\": False"
+        "          \"csv-format\": false"
         "        } ]"
         " },"
         " {"
@@ -2501,12 +3114,14 @@ TEST_F(Dhcp6ParserTest, optionDataInMultipleSubnets) {
         "    \"option-data\": [ {"
         "          \"name\": \"user-class\","
         "          \"data\": \"FFFEFDFCFB\","
-        "          \"csv-format\": False"
+        "          \"csv-format\": false"
         "        } ]"
         " } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
@@ -2514,7 +3129,7 @@ TEST_F(Dhcp6ParserTest, optionDataInMultipleSubnets) {
     Subnet6Ptr subnet1 = CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->
         selectSubnet(IOAddress("2001:db8:1::5"), classify_);
     ASSERT_TRUE(subnet1);
-    OptionContainerPtr options1 = subnet1->getCfgOption()->getAll("dhcp6");
+    OptionContainerPtr options1 = subnet1->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
     ASSERT_EQ(1, options1->size());
 
     // Get the search index. Index #1 is to search using option code.
@@ -2540,7 +3155,7 @@ TEST_F(Dhcp6ParserTest, optionDataInMultipleSubnets) {
     Subnet6Ptr subnet2 = CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->
         selectSubnet(IOAddress("2001:db8:2::4"), classify_);
     ASSERT_TRUE(subnet2);
-    OptionContainerPtr options2 = subnet2->getCfgOption()->getAll("dhcp6");
+    OptionContainerPtr options2 = subnet2->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
     ASSERT_EQ(1, options2->size());
 
     const OptionContainerTypeIndex& idx2 = options2->get<1>();
@@ -2556,6 +3171,156 @@ TEST_F(Dhcp6ParserTest, optionDataInMultipleSubnets) {
                sizeof(user_class_expected));
 }
 
+// This test verifies that it is possible to specify options on
+// pool levels.
+TEST_F(Dhcp6ParserTest, optionDataMultiplePools) {
+    ConstElementPtr x;
+    string config = "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [ { "
+        "    \"pools\": [ { "
+        "        \"pool\": \"2001:db8:1::10 - 2001:db8:1::100\","
+        "        \"option-data\": [ {"
+        "            \"name\": \"subscriber-id\","
+        "            \"data\": \"0102030405060708090A\","
+        "            \"csv-format\": false"
+        "        } ]"
+        "    },"
+        "    {"
+        "        \"pool\": \"2001:db8:1::300 - 2001:db8:1::400\","
+        "        \"option-data\": [ {"
+        "            \"name\": \"user-class\","
+        "            \"data\": \"FFFEFDFCFB\","
+        "            \"csv-format\": false"
+        "        } ]"
+        "    } ],"
+        "    \"pd-pools\": [ { "
+        "        \"prefix\": \"3000::\","
+        "        \"prefix-len\": 48,"
+        "        \"delegated-len\": 64,"
+        "        \"option-data\": [ {"
+        "            \"name\": \"subscriber-id\","
+        "            \"data\": \"112233445566\","
+        "            \"csv-format\": false"
+        "        } ]"
+        "    },"
+        "    {"
+        "        \"prefix\": \"3001::\","
+        "        \"prefix-len\": 48,"
+        "        \"delegated-len\": 64,"
+        "        \"option-data\": [ {"
+        "            \"name\": \"user-class\","
+        "            \"data\": \"aabbccddee\","
+        "            \"csv-format\": false"
+        "        } ]"
+        "    } ],"
+        "    \"subnet\": \"2001:db8:1::/64\""
+        " } ],"
+        "\"valid-lifetime\": 4000 }";
+
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
+
+    EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
+    checkResult(x, 0);
+
+    Subnet6Ptr subnet = CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->
+        selectSubnet(IOAddress("2001:db8:1::5"), classify_);
+    ASSERT_TRUE(subnet);
+
+    PoolPtr pool = subnet->getPool(Lease::TYPE_PD, IOAddress("3000::"), false);
+    ASSERT_TRUE(pool);
+    Pool6Ptr pool6 = boost::dynamic_pointer_cast<Pool6>(pool);
+    ASSERT_TRUE(pool6);
+
+    OptionContainerPtr options1 = pool6->getCfgOption()->getAll("dhcp6");
+    ASSERT_EQ(1, options1->size());
+
+    // Get the search index. Index #1 is to search using option code.
+    const OptionContainerTypeIndex& idx1 = options1->get<1>();
+
+    // Get the options for specified index. Expecting one option to be
+    // returned but in theory we may have multiple options with the same
+    // code so we get the range.
+    std::pair<OptionContainerTypeIndex::const_iterator,
+              OptionContainerTypeIndex::const_iterator> range1 =
+        idx1.equal_range(D6O_SUBSCRIBER_ID);
+    // Expect a single Subscriber ID option instance.
+    ASSERT_EQ(1, std::distance(range1.first, range1.second));
+    const uint8_t subscriber_id_expected[] = {
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66
+    };
+    // Check if option is valid in terms of code and carried data.
+    testOption(*range1.first, D6O_SUBSCRIBER_ID, subscriber_id_expected,
+               sizeof(subscriber_id_expected));
+
+    // Test another pool in the same way.
+    pool = subnet->getPool(Lease::TYPE_PD, IOAddress("3001::"), false);
+    ASSERT_TRUE(pool);
+    pool6 = boost::dynamic_pointer_cast<Pool6>(pool);
+    ASSERT_TRUE(pool6);
+
+    OptionContainerPtr options2 = pool6->getCfgOption()->getAll("dhcp6");
+    ASSERT_EQ(1, options2->size());
+
+    const OptionContainerTypeIndex& idx2 = options2->get<1>();
+    std::pair<OptionContainerTypeIndex::const_iterator,
+              OptionContainerTypeIndex::const_iterator> range2 =
+        idx2.equal_range(D6O_USER_CLASS);
+    ASSERT_EQ(1, std::distance(range2.first, range2.second));
+
+    const uint8_t user_class_expected[] = {
+        0xAA, 0xBB, 0xCC, 0xDD, 0xEE
+    };
+    testOption(*range2.first, D6O_USER_CLASS, user_class_expected,
+               sizeof(user_class_expected));
+
+    // Test options in NA pools.
+    pool = subnet->getPool(Lease::TYPE_NA, IOAddress("2001:db8:1::10"));
+    ASSERT_TRUE(pool);
+    pool6 = boost::dynamic_pointer_cast<Pool6>(pool);
+    ASSERT_TRUE(pool6);
+
+    OptionContainerPtr options3 = pool6->getCfgOption()->getAll("dhcp6");
+    ASSERT_EQ(1, options3->size());
+
+    const OptionContainerTypeIndex& idx3 = options3->get<1>();
+    std::pair<OptionContainerTypeIndex::const_iterator,
+              OptionContainerTypeIndex::const_iterator> range3 =
+        idx3.equal_range(D6O_SUBSCRIBER_ID);
+    ASSERT_EQ(1, std::distance(range3.first, range3.second));
+
+    const uint8_t subscriber_id_expected2[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A
+    };
+    testOption(*range3.first, D6O_SUBSCRIBER_ID, subscriber_id_expected2,
+               sizeof(subscriber_id_expected2));
+
+
+    pool = subnet->getPool(Lease::TYPE_NA, IOAddress("2001:db8:1::300"));
+    ASSERT_TRUE(pool);
+    pool6 = boost::dynamic_pointer_cast<Pool6>(pool);
+    ASSERT_TRUE(pool6);
+
+    OptionContainerPtr options4 = pool6->getCfgOption()->getAll("dhcp6");
+    ASSERT_EQ(1, options4->size());
+
+    const OptionContainerTypeIndex& idx4 = options4->get<1>();
+    std::pair<OptionContainerTypeIndex::const_iterator,
+              OptionContainerTypeIndex::const_iterator> range4 =
+        idx4.equal_range(D6O_USER_CLASS);
+    ASSERT_EQ(1, std::distance(range4.first, range4.second));
+
+    const uint8_t user_class_expected2[] = {
+        0xFF, 0xFE, 0xFD, 0xFC, 0xFB
+    };
+    testOption(*range4.first, D6O_USER_CLASS, user_class_expected2,
+               sizeof(user_class_expected2));
+}
+
 // The goal of this test is to check that the option carrying a boolean
 // value can be configured using one of the values: "true", "false", "0"
 // or "1".
@@ -2563,7 +3328,7 @@ TEST_F(Dhcp6ParserTest, optionDataBoolean) {
     // Create configuration. Use standard option 1000.
     std::map<std::string, std::string> params;
     params["name"] = "bool-option";
-    params["space"] = "dhcp6";
+    params["space"] = DHCP6_OPTION_SPACE;
     params["code"] = "1000";
     params["data"] = "true";
     params["csv-format"] = "true";
@@ -2614,7 +3379,7 @@ TEST_F(Dhcp6ParserTest, optionDataBoolean) {
                       sizeof(expected_option_data));
 
     // Bogus values should not be accepted.
-    params["data"] = "bugus";
+    params["data"] = "bogus";
     testInvalidOptionParam(params);
 
     params["data"] = "2";
@@ -2701,7 +3466,7 @@ TEST_F(Dhcp6ParserTest, optionDataUnexpectedPrefix) {
 TEST_F(Dhcp6ParserTest, optionDataLowerCase) {
     ConstElementPtr x;
     std::string config = createConfigWithOption("0a0b0C0D", "data");
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json = parseDHCP6(config);
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
@@ -2709,7 +3474,7 @@ TEST_F(Dhcp6ParserTest, optionDataLowerCase) {
     Subnet6Ptr subnet = CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->
         selectSubnet(IOAddress("2001:db8:1::5"), classify_);
     ASSERT_TRUE(subnet);
-    OptionContainerPtr options = subnet->getCfgOption()->getAll("dhcp6");
+    OptionContainerPtr options = subnet->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
     ASSERT_EQ(1, options->size());
 
     // Get the search index. Index #1 is to search using option code.
@@ -2737,14 +3502,14 @@ TEST_F(Dhcp6ParserTest, stdOptionData) {
     ConstElementPtr x;
     std::map<std::string, std::string> params;
     params["name"] = "ia-na";
-    params["space"] = "dhcp6";
+    params["space"] = DHCP6_OPTION_SPACE;
     // Option code 3 means OPTION_IA_NA.
     params["code"] = "3";
     params["data"] = "12345, 6789, 1516";
-    params["csv-format"] = "True";
+    params["csv-format"] = "true";
 
     std::string config = createConfigWithOption(params);
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json = parseDHCP6(config);
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
@@ -2752,7 +3517,7 @@ TEST_F(Dhcp6ParserTest, stdOptionData) {
     Subnet6Ptr subnet = CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->
         selectSubnet(IOAddress("2001:db8:1::5"), classify_);
     ASSERT_TRUE(subnet);
-    OptionContainerPtr options = subnet->getCfgOption()->getAll("dhcp6");
+    OptionContainerPtr options = subnet->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
     ASSERT_EQ(1, options->size());
 
     // Get the search index. Index #1 is to search using option code.
@@ -2786,6 +3551,65 @@ TEST_F(Dhcp6ParserTest, stdOptionData) {
     EXPECT_EQ(1516, optionIA->getT2());
 }
 
+// Verify that specific option object is returned for standard
+// option with trailing domain list.
+TEST_F(Dhcp6ParserTest, rdnssOption) {
+    ConstElementPtr x;
+    std::map<std::string, std::string> params;
+    params["name"] = "rdnss-selection";
+    params["space"] = DHCP6_OPTION_SPACE;
+    // Option code 74 is D6O_RDNSS_SELECTION
+    params["code"] = "74";
+    params["data"] = "2001::1, 3, isc.org, example.org, example.com";
+    params["csv-format"] = "true";
+
+    std::string config = createConfigWithOption(params);
+    ConstElementPtr json = parseDHCP6(config, true);
+
+    EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
+    checkResult(x, 0);
+
+    Subnet6Ptr subnet = CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->
+        selectSubnet(IOAddress("2001:db8:1::5"), classify_);
+    ASSERT_TRUE(subnet);
+    OptionContainerPtr options = subnet->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
+    ASSERT_EQ(1, options->size());
+
+    // Get the search index. Index #1 is to search using option code.
+    const OptionContainerTypeIndex& idx = options->get<1>();
+
+    // Get the options for specified index. Expecting one option to be
+    // returned but in theory we may have multiple options with the same
+    // code so we get the range.
+    std::pair<OptionContainerTypeIndex::const_iterator,
+              OptionContainerTypeIndex::const_iterator> range =
+        idx.equal_range(D6O_RDNSS_SELECTION);
+    // Expect single option with the code equal to rndnss-selection option code.
+    ASSERT_EQ(1, std::distance(range.first, range.second));
+    // The actual pointer to the option is held in the option field
+    // in the structure returned.
+    OptionPtr option = range.first->option_;
+    ASSERT_TRUE(option);
+    // Option object returned for here is expected to be OptionCustom
+    // which is derived from Option. This class is dedicated to
+    // represent standard option D6O_RDNSS_SELECTION.
+    boost::shared_ptr<OptionCustom> optionCustom =
+        boost::dynamic_pointer_cast<OptionCustom>(option);
+    // If cast is unsuccessful than option returned was of a
+    // different type than optionCustom. This is wrong.
+    ASSERT_TRUE(optionCustom);
+    // If cast was successful we may use accessors exposed by
+    // optionCustom to validate that the content of this option
+    // has been set correctly.
+    ASSERT_EQ(5, optionCustom->getDataFieldsNum());
+    EXPECT_EQ("2001::1", optionCustom->readAddress(0).toText());
+    EXPECT_EQ(3, optionCustom->readInteger<uint8_t>(1));
+    EXPECT_EQ("isc.org.", optionCustom->readFqdn(2));
+    EXPECT_EQ("example.org.", optionCustom->readFqdn(3));
+    EXPECT_EQ("example.com.", optionCustom->readFqdn(4));
+}
+
+
 // This test checks if vendor options can be specified in the config file
 // (in hex format), and later retrieved from configured subnet
 TEST_F(Dhcp6ParserTest, vendorOptionsHex) {
@@ -2803,14 +3627,14 @@ TEST_F(Dhcp6ParserTest, vendorOptionsHex) {
         "    \"space\": \"vendor-4491\","
         "    \"code\": 100,"
         "    \"data\": \"ABCDEF0105\","
-        "    \"csv-format\": False"
+        "    \"csv-format\": false"
         " },"
         " {"
         "    \"name\": \"option-two\","
         "    \"space\": \"vendor-1234\","
         "    \"code\": 100,"
         "    \"data\": \"1234\","
-        "    \"csv-format\": False"
+        "    \"csv-format\": false"
         " } ],"
         "\"subnet6\": [ { "
         "    \"pools\": [ { \"pool\": \"2001:db8:1::/80\" } ],"
@@ -2818,10 +3642,11 @@ TEST_F(Dhcp6ParserTest, vendorOptionsHex) {
         " } ]"
         "}";
 
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
+
     ConstElementPtr status;
-
-    ElementPtr json = Element::fromJSON(config);
-
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     ASSERT_TRUE(status);
     checkResult(status, 0);
@@ -2877,7 +3702,9 @@ TEST_F(Dhcp6ParserTest, vendorOptionsCsv) {
 
     ConstElementPtr status;
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     ASSERT_TRUE(status);
@@ -2941,10 +3768,11 @@ TEST_F(Dhcp6ParserTest, DISABLED_stdOptionDataEncapsulate) {
         " } ]"
         "}";
 
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
+
     ConstElementPtr status;
-
-    ElementPtr json = Element::fromJSON(config);
-
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     ASSERT_TRUE(status);
     checkResult(status, 0);
@@ -2994,9 +3822,8 @@ TEST_F(Dhcp6ParserTest, DISABLED_stdOptionDataEncapsulate) {
         " } ]"
         "}";
 
-
-    json = Element::fromJSON(config);
-
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     ASSERT_TRUE(status);
     checkResult(status, 0);
@@ -3007,12 +3834,12 @@ TEST_F(Dhcp6ParserTest, DISABLED_stdOptionDataEncapsulate) {
     ASSERT_TRUE(subnet);
 
     // We should have one option available.
-    OptionContainerPtr options = subnet->getCfgOption()->getAll("dhcp6");
+    OptionContainerPtr options = subnet->getCfgOption()->getAll(DHCP6_OPTION_SPACE);
     ASSERT_TRUE(options);
     ASSERT_EQ(1, options->size());
 
     // Get the option.
-    OptionDescriptor desc = subnet->getCfgOption()->get("dhcp6", D6O_VENDOR_OPTS);
+    OptionDescriptor desc = subnet->getCfgOption()->get(DHCP6_OPTION_SPACE, D6O_VENDOR_OPTS);
     EXPECT_TRUE(desc.option_);
     EXPECT_EQ(D6O_VENDOR_OPTS, desc.option_->getType());
 
@@ -3061,7 +3888,7 @@ buildHooksLibrariesConfig(const std::vector<std::string>& libraries) {
 
     // Create the first part of the configuration string.
     string config =
-        "{ \"interfaces-config\": { },"
+        "{ \"interfaces-config\": { \"interfaces\": [] },"
            "\"hooks-libraries\": [";
 
     // Append the libraries (separated by commas if needed)
@@ -3141,8 +3968,10 @@ TEST_F(Dhcp6ParserTest, InvalidLibrary) {
     // Parse a configuration containing a failing library.
     string config = buildHooksLibrariesConfig(NOT_PRESENT_LIBRARY);
 
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+
     ConstElementPtr status;
-    ElementPtr json = Element::fromJSON(config);
     ASSERT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // The status object must not be NULL
@@ -3197,8 +4026,6 @@ TEST_F(Dhcp6ParserTest, selectedInterfaces) {
     ASSERT_FALSE(test_config.socketOpen("eth0", AF_INET6));
     ASSERT_FALSE(test_config.socketOpen("eth1", AF_INET6));
 
-    ConstElementPtr status;
-
     string config = "{ \"interfaces-config\": {"
         "  \"interfaces\": [ \"eth0\" ]"
         "},"
@@ -3208,8 +4035,11 @@ TEST_F(Dhcp6ParserTest, selectedInterfaces) {
         "\"valid-lifetime\": 4000 }";
 
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value must be 1 (values error)
@@ -3231,8 +4061,6 @@ TEST_F(Dhcp6ParserTest, allInterfaces) {
     ASSERT_FALSE(test_config.socketOpen("eth0", AF_INET6));
     ASSERT_FALSE(test_config.socketOpen("eth1", AF_INET6));
 
-    ConstElementPtr status;
-
     // This configuration specifies two interfaces on which server should listen
     // but also includes '*'. This keyword switches server into the
     // mode when it listens on all interfaces regardless of what interface names
@@ -3246,8 +4074,11 @@ TEST_F(Dhcp6ParserTest, allInterfaces) {
         "\"valid-lifetime\": 4000 }";
 
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     checkResult(status, 0);
 
@@ -3262,8 +4093,6 @@ TEST_F(Dhcp6ParserTest, allInterfaces) {
 // This test checks if it is possible to specify relay information
 TEST_F(Dhcp6ParserTest, subnetRelayInfo) {
 
-    ConstElementPtr status;
-
     // A config with relay information.
     string config = "{ " + genIfaceConfig() + ","
         "\"rebind-timer\": 2000, "
@@ -3277,8 +4106,11 @@ TEST_F(Dhcp6ParserTest, subnetRelayInfo) {
         "\"preferred-lifetime\": 3000, "
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value should be 0 (configuration success)
@@ -3319,7 +4151,9 @@ TEST_F(Dhcp6ParserTest, classifySubnets) {
         " } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
@@ -3377,12 +4211,198 @@ TEST_F(Dhcp6ParserTest, classifySubnets) {
     EXPECT_TRUE (subnets->at(3)->clientSupported(classes));
 }
 
+// Goal of this test is to verify that multiple pools can be configured
+// with defined client classes.
+TEST_F(Dhcp6ParserTest, classifyPools) {
+    ConstElementPtr x;
+    string config = "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [ { "
+        "    \"pools\": [ { "
+        "        \"pool\": \"2001:db8:1::/80\", "
+        "        \"client-class\": \"alpha\" "
+        "     },"
+        "     {"
+        "        \"pool\": \"2001:db8:2::/80\", "
+        "        \"client-class\": \"beta\" "
+        "     },"
+        "     {"
+        "        \"pool\": \"2001:db8:3::/80\", "
+        "        \"client-class\": \"gamma\" "
+        "     },"
+        "     {"
+        "         \"pool\": \"2001:db8:4::/80\" "
+        "     } ],"
+        "    \"subnet\": \"2001:db8:0::/40\" "
+        " } ],"
+        "\"valid-lifetime\": 4000 }";
+
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config, true));
+    extractConfig(config);
+
+    EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
+    checkResult(x, 0);
+
+    const Subnet6Collection* subnets =
+        CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->getAll();
+    ASSERT_TRUE(subnets);
+    ASSERT_EQ(1, subnets->size());
+    const PoolCollection& pools = subnets->at(0)->getPools(Lease::TYPE_NA);
+    ASSERT_EQ(4, pools.size()); // We expect 4 pools
+
+    // Let's check if client belonging to alpha class is supported in pool[0]
+    // and not supported in any other pool (except pool[3], which allows
+    // everyone).
+    ClientClasses classes;
+    classes.insert("alpha");
+    EXPECT_TRUE (pools.at(0)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(1)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(2)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(3)->clientSupported(classes));
+
+    // Let's check if client belonging to beta class is supported in pool[1]
+    // and not supported in any other pool  (except pool[3], which allows
+    // everyone).
+    classes.clear();
+    classes.insert("beta");
+    EXPECT_FALSE(pools.at(0)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(1)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(2)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(3)->clientSupported(classes));
+
+    // Let's check if client belonging to gamma class is supported in pool[2]
+    // and not supported in any other pool  (except pool[3], which allows
+    // everyone).
+    classes.clear();
+    classes.insert("gamma");
+    EXPECT_FALSE(pools.at(0)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(1)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(2)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(3)->clientSupported(classes));
+
+    // Let's check if client belonging to some other class (not mentioned in
+    // the config) is supported only in pool[3], which allows everyone.
+    classes.clear();
+    classes.insert("delta");
+    EXPECT_FALSE(pools.at(0)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(1)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(2)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(3)->clientSupported(classes));
+
+    // Finally, let's check class-less client. He should be allowed only in
+    // the last pool, which does not have any class restrictions.
+    classes.clear();
+    EXPECT_FALSE(pools.at(0)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(1)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(2)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(3)->clientSupported(classes));
+}
+
+// Goal of this test is to verify that multiple pdpools can be configured
+// with defined client classes.
+TEST_F(Dhcp6ParserTest, classifyPdPools) {
+    ConstElementPtr x;
+    string config = "{ " + genIfaceConfig() + ","
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [ { "
+        "    \"pd-pools\": [ { "
+        "        \"prefix-len\": 48, "
+        "        \"delegated-len\": 64, "
+        "        \"prefix\": \"2001:db8:1::\", "
+        "        \"client-class\": \"alpha\" "
+        "     },"
+        "     {"
+        "        \"prefix-len\": 48, "
+        "        \"delegated-len\": 64, "
+        "        \"prefix\": \"2001:db8:2::\", "
+        "        \"client-class\": \"beta\" "
+        "     },"
+        "     {"
+        "        \"prefix-len\": 48, "
+        "        \"delegated-len\": 64, "
+        "        \"prefix\": \"2001:db8:3::\", "
+        "        \"client-class\": \"gamma\" "
+        "     },"
+        "     {"
+        "        \"prefix-len\": 48, "
+        "        \"delegated-len\": 64, "
+        "         \"prefix\": \"2001:db8:4::\" "
+        "     } ],"
+        "    \"subnet\": \"2001:db8::/64\" "
+        " } ],"
+        "\"valid-lifetime\": 4000 }";
+
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config, true));
+    extractConfig(config);
+
+    EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
+    checkResult(x, 0);
+
+    const Subnet6Collection* subnets =
+        CfgMgr::instance().getStagingCfg()->getCfgSubnets6()->getAll();
+    ASSERT_TRUE(subnets);
+    ASSERT_EQ(1, subnets->size());
+    const PoolCollection& pools = subnets->at(0)->getPools(Lease::TYPE_PD);
+    ASSERT_EQ(4, pools.size()); // We expect 4 pools
+
+    // Let's check if client belonging to alpha class is supported in pool[0]
+    // and not supported in any other pool (except pool[3], which allows
+    // everyone).
+    ClientClasses classes;
+    classes.insert("alpha");
+    EXPECT_TRUE (pools.at(0)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(1)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(2)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(3)->clientSupported(classes));
+
+    // Let's check if client belonging to beta class is supported in pool[1]
+    // and not supported in any other pool  (except pool[3], which allows
+    // everyone).
+    classes.clear();
+    classes.insert("beta");
+    EXPECT_FALSE(pools.at(0)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(1)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(2)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(3)->clientSupported(classes));
+
+    // Let's check if client belonging to gamma class is supported in pool[2]
+    // and not supported in any other pool  (except pool[3], which allows
+    // everyone).
+    classes.clear();
+    classes.insert("gamma");
+    EXPECT_FALSE(pools.at(0)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(1)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(2)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(3)->clientSupported(classes));
+
+    // Let's check if client belonging to some other class (not mentioned in
+    // the config) is supported only in pool[3], which allows everyone.
+    classes.clear();
+    classes.insert("delta");
+    EXPECT_FALSE(pools.at(0)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(1)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(2)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(3)->clientSupported(classes));
+
+    // Finally, let's check class-less client. He should be allowed only in
+    // the last pool, which does not have any class restrictions.
+    classes.clear();
+    EXPECT_FALSE(pools.at(0)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(1)->clientSupported(classes));
+    EXPECT_FALSE(pools.at(2)->clientSupported(classes));
+    EXPECT_TRUE (pools.at(3)->clientSupported(classes));
+}
+
 // This test checks the ability of the server to parse a configuration
 // containing a full, valid dhcp-ddns (D2ClientConfig) entry.
 TEST_F(Dhcp6ParserTest, d2ClientConfig) {
-    ConstElementPtr status;
-
-    // Verify that the D2 configuraiton can be fetched and is set to disabled.
+    // Verify that the D2 configuration can be fetched and is set to disabled.
     D2ClientConfigPtr d2_client_config = CfgMgr::instance().getD2ClientConfig();
     EXPECT_FALSE(d2_client_config->getEnableUpdates());
 
@@ -3407,7 +4427,6 @@ TEST_F(Dhcp6ParserTest, d2ClientConfig) {
         "     \"ncr-protocol\" : \"UDP\", "
         "     \"ncr-format\" : \"JSON\", "
         "     \"always-include-fqdn\" : true, "
-        "     \"allow-client-update\" : true, "
         "     \"override-no-update\" : true, "
         "     \"override-client-update\" : true, "
         "     \"replace-client-name\" : \"when-present\", "
@@ -3416,10 +4435,12 @@ TEST_F(Dhcp6ParserTest, d2ClientConfig) {
         "\"valid-lifetime\": 4000 }";
 
     // Convert the JSON string to configuration elements.
-    ElementPtr config;
-    ASSERT_NO_THROW(config = Element::fromJSON(config_str));
+    ConstElementPtr config;
+    ASSERT_NO_THROW(config = parseDHCP6(config_str));
+    extractConfig(config_str);
 
     // Pass the configuration in for parsing.
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, config));
 
     // check if returned status is OK
@@ -3452,8 +4473,6 @@ TEST_F(Dhcp6ParserTest, d2ClientConfig) {
 // This test checks the ability of the server to handle a configuration
 // containing an invalid dhcp-ddns (D2ClientConfig) entry.
 TEST_F(Dhcp6ParserTest, invalidD2ClientConfig) {
-    ConstElementPtr status;
-
     // Configuration string with an invalid D2 client config,
     // "server-ip" is invalid.
     string config_str = "{ " + genIfaceConfig() + ","
@@ -3469,7 +4488,6 @@ TEST_F(Dhcp6ParserTest, invalidD2ClientConfig) {
         "     \"ncr-protocol\" : \"UDP\", "
         "     \"ncr-format\" : \"JSON\", "
         "     \"always-include-fqdn\" : true, "
-        "     \"allow-client-update\" : true, "
         "     \"override-no-update\" : true, "
         "     \"override-client-update\" : true, "
         "     \"replace-client-name\" : \"when-present\", "
@@ -3478,17 +4496,18 @@ TEST_F(Dhcp6ParserTest, invalidD2ClientConfig) {
         "\"valid-lifetime\": 4000 }";
 
     // Convert the JSON string to configuration elements.
-    ElementPtr config;
-    ASSERT_NO_THROW(config = Element::fromJSON(config_str));
+    ConstElementPtr config;
+    ASSERT_NO_THROW(config = parseDHCP6(config_str));
 
     // Configuration should not throw, but should fail.
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, config));
 
     // check if returned status is failed.
     checkResult(status, 1);
     EXPECT_TRUE(errorContainsPosition(status, "<string>"));
 
-    // Verify that the D2 configuraiton can be fetched and is set to disabled.
+    // Verify that the D2 configuration can be fetched and is set to disabled.
     D2ClientConfigPtr d2_client_config = CfgMgr::instance().getD2ClientConfig();
     EXPECT_FALSE(d2_client_config->getEnableUpdates());
 
@@ -3594,7 +4613,9 @@ TEST_F(Dhcp6ParserTest, reservations) {
         "\"preferred-lifetime\": 3000,"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
@@ -3749,7 +4770,9 @@ TEST_F(Dhcp6ParserTest, reservationWithOptionDefinition) {
         "\"preferred-lifetime\": 3000,"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 0);
@@ -3802,10 +4825,12 @@ TEST_F(Dhcp6ParserTest, reservationBogus) {
         "\"preferred-lifetime\": 3000,"
         "\"valid-lifetime\": 4000 }";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json = parseJSON(config);
 
     EXPECT_NO_THROW(x = configureDhcp6Server(srv_, json));
     checkResult(x, 1);
+
+    EXPECT_THROW(parseDHCP6(config), Dhcp6ParseError);
 
     // Case 2: DUID and HW Address both specified.
     config = "{ " + genIfaceConfig() + ","
@@ -3829,7 +4854,7 @@ TEST_F(Dhcp6ParserTest, reservationBogus) {
         "\"preferred-lifetime\": 3000,"
         "\"valid-lifetime\": 4000 }";
 
-    json = Element::fromJSON(config);
+    json = parseDHCP6(config);
 
     // Remove existing configuration, if any.
     CfgMgr::instance().clear();
@@ -3856,7 +4881,7 @@ TEST_F(Dhcp6ParserTest, reservationBogus) {
         "\"preferred-lifetime\": 3000,"
         "\"valid-lifetime\": 4000 }";
 
-    json = Element::fromJSON(config);
+    json = parseDHCP6(config);
 
     // Remove existing configuration, if any.
     CfgMgr::instance().clear();
@@ -3889,7 +4914,7 @@ TEST_F(Dhcp6ParserTest, reservationBogus) {
         "\"preferred-lifetime\": 3000,"
         "\"valid-lifetime\": 4000 }";
 
-    json = Element::fromJSON(config);
+    json = parseDHCP6(config);
 
     // Remove existing configuration, if any.
     CfgMgr::instance().clear();
@@ -3899,76 +4924,101 @@ TEST_F(Dhcp6ParserTest, reservationBogus) {
 }
 
 /// The goal of this test is to verify that configuration can include
-/// MAC/Hardware sources. This test also checks if the aliases are
-/// handled properly (rfc6939 = client-addr-relay, rfc4649 = remote-id,
-/// rfc4580 = subscriber-id).
-TEST_F(Dhcp6ParserTest, macSources) {
+/// MAC/Hardware sources. This case uses RFC numbers to reference methods.
+/// Also checks if the aliases are handled properly (rfc6939 = client-addr-relay,
+/// rfc4649 = remote-id, rfc4580 = subscriber-id).
+TEST_F(Dhcp6ParserTest, macSources1) {
+
+    string config = "{ " + genIfaceConfig() + ","
+        "\"mac-sources\": [ \"rfc6939\", \"rfc4649\", \"rfc4580\" ],"
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [  ], "
+        "\"valid-lifetime\": 4000 }";
+
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     ConstElementPtr status;
-
-    EXPECT_NO_THROW(status = configureDhcp6Server(srv_,
-        Element::fromJSON("{ " + genIfaceConfig() + ","
-                          "\"mac-sources\": [ \"rfc6939\", \"rfc4649\", \"rfc4580\","
-                          "\"client-link-addr-option\", \"remote-id\", \"subscriber-id\"],"
-                          "\"preferred-lifetime\": 3000,"
-                          "\"rebind-timer\": 2000, "
-                          "\"renew-timer\": 1000, "
-                          "\"subnet6\": [  ], "
-                          "\"valid-lifetime\": 4000 }")));
-
-    // returned value should be 0 (success)
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     checkResult(status, 0);
 
-    CfgMACSources mac_sources = CfgMgr::instance().getStagingCfg()->getMACSources().get();
-    ASSERT_EQ(6, mac_sources.size());
-    // Let's check the aliases. They should be recognized to their base methods.
-    EXPECT_EQ(HWAddr::HWADDR_SOURCE_CLIENT_ADDR_RELAY_OPTION, mac_sources[0]);
-    EXPECT_EQ(HWAddr::HWADDR_SOURCE_REMOTE_ID, mac_sources[1]);
-    EXPECT_EQ(HWAddr::HWADDR_SOURCE_SUBSCRIBER_ID, mac_sources[2]);
+    CfgMACSources sources = CfgMgr::instance().getStagingCfg()->getMACSources().get();
 
-    // Let's check if the actual methods are recognized properly.
-    EXPECT_EQ(HWAddr::HWADDR_SOURCE_CLIENT_ADDR_RELAY_OPTION, mac_sources[3]);
-    EXPECT_EQ(HWAddr::HWADDR_SOURCE_REMOTE_ID, mac_sources[4]);
-    EXPECT_EQ(HWAddr::HWADDR_SOURCE_SUBSCRIBER_ID, mac_sources[5]);
+    ASSERT_EQ(3, sources.size());
+    // Let's check the aliases. They should be recognized to their base methods.
+    EXPECT_EQ(HWAddr::HWADDR_SOURCE_CLIENT_ADDR_RELAY_OPTION, sources[0]);
+    EXPECT_EQ(HWAddr::HWADDR_SOURCE_REMOTE_ID, sources[1]);
+    EXPECT_EQ(HWAddr::HWADDR_SOURCE_SUBSCRIBER_ID, sources[2]);
 }
 
-/// The goal of this test is to verify that MAC sources configuration can be
-/// empty.
-TEST_F(Dhcp6ParserTest, macSourcesEmpty) {
+/// The goal of this test is to verify that configuration can include
+/// MAC/Hardware sources. This uses specific method names.
+TEST_F(Dhcp6ParserTest, macSources2) {
 
+    string config = "{ " + genIfaceConfig() + ","
+        "\"mac-sources\": [ \"client-link-addr-option\", \"remote-id\", "
+        "                   \"subscriber-id\"],"
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [  ], "
+        "\"valid-lifetime\": 4000 }";
+
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
+
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
+    checkResult(status, 0);
+
+    CfgMACSources sources = CfgMgr::instance().getStagingCfg()->getMACSources().get();
+
+    ASSERT_EQ(3, sources.size());
+    // Let's check the aliases. They should be recognized to their base methods.
+    EXPECT_EQ(HWAddr::HWADDR_SOURCE_CLIENT_ADDR_RELAY_OPTION, sources[0]);
+    EXPECT_EQ(HWAddr::HWADDR_SOURCE_REMOTE_ID, sources[1]);
+    EXPECT_EQ(HWAddr::HWADDR_SOURCE_SUBSCRIBER_ID, sources[2]);
+}
+
+
+/// The goal of this test is to verify that empty MAC sources configuration
+/// is rejected. If specified, this has to have at least one value.
+TEST_F(Dhcp6ParserTest, macSourcesEmpty) {
     ConstElementPtr status;
 
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_,
-                    Element::fromJSON("{ " + genIfaceConfig() + ","
-                                      "\"mac-sources\": [ ],"
-                                      "\"preferred-lifetime\": 3000,"
-                                      "\"rebind-timer\": 2000, "
-                                      "\"renew-timer\": 1000, "
-                                      "\"subnet6\": [  ], "
-                                      "\"valid-lifetime\": 4000 }")));
+                    parseJSON("{ " + genIfaceConfig() + ","
+                              "\"mac-sources\": [ ],"
+                              "\"preferred-lifetime\": 3000,"
+                              "\"rebind-timer\": 2000, "
+                              "\"renew-timer\": 1000, "
+                              "\"subnet6\": [  ], "
+                              "\"valid-lifetime\": 4000 }")));
 
-    // returned value should be 0 (success)
-    checkResult(status, 0);
-
-    CfgMACSources mac_sources = CfgMgr::instance().getStagingCfg()->getMACSources().get();
-    EXPECT_EQ(0, mac_sources.size());
+    // returned value should be 1 (failure), because the mac-sources must not
+    // be empty when specified.
+    checkResult(status, 1);
 }
 
 /// The goal of this test is to verify that MAC sources configuration can
 /// only use valid parameters.
 TEST_F(Dhcp6ParserTest, macSourcesBogus) {
 
-    ConstElementPtr status;
-
-    EXPECT_NO_THROW(status = configureDhcp6Server(srv_,
-                    Element::fromJSON("{ " + genIfaceConfig() + ","
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6("{ " + genIfaceConfig() + ","
                                       "\"mac-sources\": [ \"from-wire\" ],"
                                       "\"preferred-lifetime\": 3000,"
                                       "\"rebind-timer\": 2000, "
                                       "\"renew-timer\": 1000, "
                                       "\"subnet6\": [  ], "
-                                      "\"valid-lifetime\": 4000 }")));
+                                      "\"valid-lifetime\": 4000 }"));
 
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     // returned value should be 1 (failure)
     checkResult(status, 1);
 }
@@ -4010,10 +5060,12 @@ TEST_F(Dhcp6ParserTest, hostReservationPerSubnet) {
         " } ],"
         "\"valid-lifetime\": 4000 }";
 
-    ConstElementPtr status;
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(HR_CONFIG));
+    extractConfig(HR_CONFIG);
 
-    EXPECT_NO_THROW(status = configureDhcp6Server(srv_,
-                    Element::fromJSON(HR_CONFIG)));
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value should be 0 (success)
     checkResult(status, 0);
@@ -4031,38 +5083,40 @@ TEST_F(Dhcp6ParserTest, hostReservationPerSubnet) {
     Subnet6Ptr subnet;
     subnet = subnets->selectSubnet(IOAddress("2001:db8:1::1"));
     ASSERT_TRUE(subnet);
-    EXPECT_EQ(Subnet::HR_ALL, subnet->getHostReservationMode());
+    EXPECT_EQ(Network::HR_ALL, subnet->getHostReservationMode());
 
     // Subnet 2
     subnet = subnets->selectSubnet(IOAddress("2001:db8:2::1"));
     ASSERT_TRUE(subnet);
-    EXPECT_EQ(Subnet::HR_OUT_OF_POOL, subnet->getHostReservationMode());
+    EXPECT_EQ(Network::HR_OUT_OF_POOL, subnet->getHostReservationMode());
 
     // Subnet 3
     subnet = subnets->selectSubnet(IOAddress("2001:db8:3::1"));
     ASSERT_TRUE(subnet);
-    EXPECT_EQ(Subnet::HR_DISABLED, subnet->getHostReservationMode());
+    EXPECT_EQ(Network::HR_DISABLED, subnet->getHostReservationMode());
 
     // Subnet 4
     subnet = subnets->selectSubnet(IOAddress("2001:db8:4::1"));
     ASSERT_TRUE(subnet);
-    EXPECT_EQ(Subnet::HR_ALL, subnet->getHostReservationMode());
+    EXPECT_EQ(Network::HR_ALL, subnet->getHostReservationMode());
 }
 
 /// The goal of this test is to verify that configuration can include
 /// Relay Supplied options (specified as numbers).
 TEST_F(Dhcp6ParserTest, rsooNumbers) {
 
-    ConstElementPtr status;
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json =
+        parseDHCP6("{ " + genIfaceConfig() + ","
+                   "\"relay-supplied-options\": [ \"10\", \"20\", \"30\" ],"
+                   "\"preferred-lifetime\": 3000,"
+                   "\"rebind-timer\": 2000, "
+                   "\"renew-timer\": 1000, "
+                   "\"subnet6\": [  ], "
+                   "\"valid-lifetime\": 4000 }"));
 
-    EXPECT_NO_THROW(status = configureDhcp6Server(srv_,
-        Element::fromJSON("{ " + genIfaceConfig() + ","
-                          "\"relay-supplied-options\": [ \"10\", \"20\", \"30\" ],"
-                          "\"preferred-lifetime\": 3000,"
-                          "\"rebind-timer\": 2000, "
-                          "\"renew-timer\": 1000, "
-                          "\"subnet6\": [  ], "
-                          "\"valid-lifetime\": 4000 }")));
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value should be 0 (success)
     checkResult(status, 0);
@@ -4086,16 +5140,20 @@ TEST_F(Dhcp6ParserTest, rsooNumbers) {
 /// Relay Supplied options (specified as names).
 TEST_F(Dhcp6ParserTest, rsooNames) {
 
-    ConstElementPtr status;
+    string config = "{ " + genIfaceConfig() + ","
+        "\"relay-supplied-options\": [ \"dns-servers\", \"remote-id\" ],"
+        "\"preferred-lifetime\": 3000,"
+        "\"rebind-timer\": 2000, "
+        "\"renew-timer\": 1000, "
+        "\"subnet6\": [  ], "
+        "\"valid-lifetime\": 4000 }";
 
-    EXPECT_NO_THROW(status = configureDhcp6Server(srv_,
-        Element::fromJSON("{ " + genIfaceConfig() + ","
-                          "\"relay-supplied-options\": [ \"dns-servers\", \"remote-id\" ],"
-                          "\"preferred-lifetime\": 3000,"
-                          "\"rebind-timer\": 2000, "
-                          "\"renew-timer\": 1000, "
-                          "\"subnet6\": [  ], "
-                          "\"valid-lifetime\": 4000 }")));
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
+
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value should be 0 (success)
     checkResult(status, 0);
@@ -4134,69 +5192,99 @@ TEST_F(Dhcp6ParserTest, rsooNames) {
 }
 
 TEST_F(Dhcp6ParserTest, rsooNegativeNumber) {
-    ConstElementPtr status;
-    EXPECT_NO_THROW(status = configureDhcp6Server(srv_,
-        Element::fromJSON("{ " + genIfaceConfig() + ","
-                          "\"relay-supplied-options\": [ \"80\", \"-2\" ],"
-                          "\"preferred-lifetime\": 3000,"
-                          "\"rebind-timer\": 2000, "
-                          "\"renew-timer\": 1000, "
-                          "\"subnet6\": [  ], "
-                          "\"valid-lifetime\": 4000 }")));
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json =
+        parseDHCP6("{ " + genIfaceConfig() + ","
+                   "\"relay-supplied-options\": [ \"80\", \"-2\" ],"
+                   "\"preferred-lifetime\": 3000,"
+                   "\"rebind-timer\": 2000, "
+                   "\"renew-timer\": 1000, "
+                   "\"subnet6\": [  ], "
+                   "\"valid-lifetime\": 4000 }"));
 
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     // returned value should be 0 (success)
     checkResult(status, 1);
     EXPECT_TRUE(errorContainsPosition(status, "<string>"));
 }
 
 TEST_F(Dhcp6ParserTest, rsooBogusName) {
-    ConstElementPtr status;
-    EXPECT_NO_THROW(status = configureDhcp6Server(srv_,
-        Element::fromJSON("{ " + genIfaceConfig() + ","
-                          "\"relay-supplied-options\": [ \"bogus\", \"dns-servers\" ],"
-                          "\"preferred-lifetime\": 3000,"
-                          "\"rebind-timer\": 2000, "
-                          "\"renew-timer\": 1000, "
-                          "\"subnet6\": [  ], "
-                          "\"valid-lifetime\": 4000 }")));
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json =
+        parseDHCP6("{ " + genIfaceConfig() + ","
+                   "\"relay-supplied-options\": [ \"bogus\", \"dns-servers\" ],"
+                   "\"preferred-lifetime\": 3000,"
+                   "\"rebind-timer\": 2000, "
+                   "\"renew-timer\": 1000, "
+                   "\"subnet6\": [  ], "
+                   "\"valid-lifetime\": 4000 }"));
 
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     // returned value should be 0 (success)
     checkResult(status, 1);
     EXPECT_TRUE(errorContainsPosition(status, "<string>"));
 }
 
-/// Check that the decline-probation-period value can be set properly.
+/// Check that the decline-probation-period value has a default value if not
+/// specified explicitly.
 TEST_F(Dhcp6ParserTest, declineTimerDefault) {
-
-    ConstElementPtr status;
 
     string config_txt = "{ " + genIfaceConfig() + ","
         "\"subnet6\": [  ] "
         "}";
-    ElementPtr config = Element::fromJSON(config_txt);
+    ConstElementPtr config;
+    ASSERT_NO_THROW(config = parseDHCP6(config_txt));
+    extractConfig(config_txt);
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, config));
 
     // returned value should be 0 (success)
     checkResult(status, 0);
 
     // The value of decline-probation-period must be equal to the
-    // default value.
-    EXPECT_EQ(DEFAULT_DECLINE_PROBATION_PERIOD,
-              CfgMgr::instance().getStagingCfg()->getDeclinePeriod());
+    // default value (86400). The default value is defined in GLOBAL6_DEFAULTS in
+    // simple_parser6.cc.
+    EXPECT_EQ(86400, CfgMgr::instance().getStagingCfg()->getDeclinePeriod());
+}
+
+/// Check that the dhcp4o6-port default value has a default value if not
+/// specified explicitly.
+TEST_F(Dhcp6ParserTest, dhcp4o6portDefault) {
+
+    string config_txt = "{ " + genIfaceConfig() + ","
+        "\"subnet6\": [  ] "
+        "}";
+    ConstElementPtr config;
+    ASSERT_NO_THROW(config = parseDHCP6(config_txt));
+    extractConfig(config_txt);
+
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, config));
+
+    // returned value should be 0 (success)
+    checkResult(status, 0);
+
+    // The value of decline-probation-period must be equal to the
+    // default value (0). The default value is defined in GLOBAL6_DEFAULTS in
+    // simple_parser6.cc.
+    EXPECT_EQ(0, CfgMgr::instance().getStagingCfg()->getDhcp4o6Port());
 }
 
 /// Check that the decline-probation-period value can be set properly.
 TEST_F(Dhcp6ParserTest, declineTimer) {
-    ConstElementPtr status;
-
     string config = "{ " + genIfaceConfig() + "," +
         "\"decline-probation-period\": 12345,"
         "\"subnet6\": [ ]"
         "}";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value should be 0 (success)
@@ -4210,15 +5298,14 @@ TEST_F(Dhcp6ParserTest, declineTimer) {
 
 /// Check that an incorrect decline-probation-period value will be caught.
 TEST_F(Dhcp6ParserTest, declineTimerError) {
-    ConstElementPtr status;
-
     string config = "{ " + genIfaceConfig() + "," +
         "\"decline-probation-period\": \"soon\","
         "\"subnet6\": [ ]"
         "}";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json = parseJSON(config);
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
 
     // returned value should be 1 (error)
@@ -4226,6 +5313,9 @@ TEST_F(Dhcp6ParserTest, declineTimerError) {
 
     // Check that the error contains error position.
     EXPECT_TRUE(errorContainsPosition(status, "<string>"));
+
+    // Check that the Dhcp6 parser catches the type error
+    EXPECT_THROW(parseDHCP6(config), Dhcp6ParseError);
 }
 
 // Check that configuration for the expired leases processing may be
@@ -4245,7 +5335,9 @@ TEST_F(Dhcp6ParserTest, expiredLeasesProcessing) {
         "\"subnet6\": [ ]"
         "}";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
     ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
@@ -4285,7 +5377,8 @@ TEST_F(Dhcp6ParserTest, expiredLeasesProcessingError) {
         "\"subnet6\": [ ]"
         "}";
 
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
 
     ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
@@ -4321,9 +5414,11 @@ TEST_F(Dhcp6ParserTest, validClientClassDictionary) {
         "    \"subnet\": \"2001:db8:1::/64\" } ], \n"
         "\"valid-lifetime\": 4000 } \n";
 
-    ConstElementPtr status;
-    ElementPtr json = Element::fromJSON(config);
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config));
+    extractConfig(config);
 
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     ASSERT_TRUE(status);
     checkResult(status, 0);
@@ -4356,18 +5451,1097 @@ TEST_F(Dhcp6ParserTest, invalidClientClassDictionary) {
         "       \"bogus\": \"bad\" \n"
         "   } \n"
         "], \n"
-        "\"subnet4\": [ {  \n"
-        "    \"pools\": [ { \"pool\":  \"192.0.2.1 - 192.0.2.100\" } ], \n"
-        "    \"subnet\": \"192.0.2.0/24\"  \n"
+        "\"subnet6\": [ {  \n"
+        "    \"pools\": [ { \"pool\":  \"2001:db8::1 - 2001:db8::ffff\" } ], \n"
+        "    \"subnet\": \"2001:db8::/64\"  \n"
         " } ] \n"
         "} \n";
 
-    ConstElementPtr status;
-    ElementPtr json = Element::fromJSON(config);
+    EXPECT_THROW(parseDHCP6(config), Dhcp6ParseError);
+}
 
+// Test verifies that regular configuration does not provide any user context
+// in the address pool.
+TEST_F(Dhcp6ParserTest, poolUserContextMissing) {
+    extractConfig(PARSER_CONFIGS[0]);
+    PoolPtr pool;
+    getPool(string(PARSER_CONFIGS[0]), 0, 0, Lease::TYPE_NA, pool);
+    ASSERT_TRUE(pool);
+    EXPECT_FALSE(pool->getContext());
+}
+
+// Test verifies that it's possible to specify empty user context in the
+// address pool.
+TEST_F(Dhcp6ParserTest, poolUserContextEmpty) {
+    extractConfig(PARSER_CONFIGS[1]);
+    PoolPtr pool;
+    getPool(string(PARSER_CONFIGS[1]), 0, 0, Lease::TYPE_NA, pool);
+    ASSERT_TRUE(pool);
+    ConstElementPtr ctx = pool->getContext();
+    ASSERT_TRUE(ctx);
+
+    // The context should be of type map and not contain any parameters.
+    EXPECT_EQ(Element::map, ctx->getType());
+    EXPECT_EQ(0, ctx->size());
+}
+
+// Test verifies that it's possible to specify parameters in the user context
+// in the address pool.
+TEST_F(Dhcp6ParserTest, poolUserContextlw4over6) {
+    extractConfig(PARSER_CONFIGS[2]);
+    PoolPtr pool;
+    getPool(string(PARSER_CONFIGS[2]), 0, 0, Lease::TYPE_NA, pool);
+    ASSERT_TRUE(pool);
+    ConstElementPtr ctx = pool->getContext();
+    ASSERT_TRUE(ctx);
+
+    // The context should be of type map and contain 4 parameters.
+    EXPECT_EQ(Element::map, ctx->getType());
+    EXPECT_EQ(4, ctx->size());
+    ConstElementPtr ratio   = ctx->get("lw4over6-sharing-ratio");
+    ConstElementPtr v4pool  = ctx->get("lw4over6-v4-pool");
+    ConstElementPtr exclude = ctx->get("lw4over6-sysports-exclude");
+    ConstElementPtr v6len   = ctx->get("lw4over6-bind-prefix-len");
+
+    ASSERT_TRUE(ratio);
+    ASSERT_EQ(Element::integer, ratio->getType());
+    int64_t int_value;
+    EXPECT_NO_THROW(ratio->getValue(int_value));
+    EXPECT_EQ(64L, int_value);
+
+    ASSERT_TRUE(v4pool);
+    ASSERT_EQ(Element::string, v4pool->getType());
+    EXPECT_EQ("192.0.2.0/24", v4pool->stringValue());
+
+    ASSERT_TRUE(exclude);
+    bool bool_value;
+    ASSERT_EQ(Element::boolean, exclude->getType());
+    EXPECT_NO_THROW(exclude->getValue(bool_value));
+    EXPECT_EQ(true, bool_value);
+
+    ASSERT_TRUE(v6len);
+    ASSERT_EQ(Element::integer, v6len->getType());
+    EXPECT_NO_THROW(v6len->getValue(int_value));
+    EXPECT_EQ(56L, int_value);
+}
+
+// Test verifies that it's possible to specify parameters in the user context
+// in the min-max address pool.
+TEST_F(Dhcp6ParserTest, poolMinMaxUserContext) {
+    extractConfig(PARSER_CONFIGS[3]);
+    PoolPtr pool;
+    getPool(string(PARSER_CONFIGS[3]), 0, 0, Lease::TYPE_NA, pool);
+    ASSERT_TRUE(pool);
+    ConstElementPtr ctx = pool->getContext();
+    ASSERT_TRUE(ctx);
+
+    // The context should be of type map and contain 4 parameters.
+    EXPECT_EQ(Element::map, ctx->getType());
+    EXPECT_EQ(4, ctx->size());
+    ConstElementPtr ratio   = ctx->get("lw4over6-sharing-ratio");
+    ConstElementPtr v4pool  = ctx->get("lw4over6-v4-pool");
+    ConstElementPtr exclude = ctx->get("lw4over6-sysports-exclude");
+    ConstElementPtr v6len   = ctx->get("lw4over6-bind-prefix-len");
+
+    ASSERT_TRUE(ratio);
+    ASSERT_EQ(Element::integer, ratio->getType());
+    int64_t int_value;
+    EXPECT_NO_THROW(ratio->getValue(int_value));
+    EXPECT_EQ(64L, int_value);
+
+    ASSERT_TRUE(v4pool);
+    ASSERT_EQ(Element::string, v4pool->getType());
+    EXPECT_EQ("192.0.2.0/24", v4pool->stringValue());
+
+    ASSERT_TRUE(exclude);
+    bool bool_value;
+    ASSERT_EQ(Element::boolean, exclude->getType());
+    EXPECT_NO_THROW(exclude->getValue(bool_value));
+    EXPECT_EQ(true, bool_value);
+
+    ASSERT_TRUE(v6len);
+    ASSERT_EQ(Element::integer, v6len->getType());
+    EXPECT_NO_THROW(v6len->getValue(int_value));
+    EXPECT_EQ(56L, int_value);
+}
+
+// Test verifies that regular configuration does not provide any user context
+// in the address pool.
+TEST_F(Dhcp6ParserTest, pdPoolUserContextMissing) {
+    extractConfig(PARSER_CONFIGS[4]);
+    PoolPtr pool;
+    getPool(string(PARSER_CONFIGS[4]), 0, 0, Lease::TYPE_PD, pool);
+    ASSERT_TRUE(pool);
+    EXPECT_FALSE(pool->getContext());
+}
+
+// Test verifies that it's possible to specify empty user context in the
+// address pool.
+TEST_F(Dhcp6ParserTest, pdPoolUserContextEmpty) {
+    extractConfig(PARSER_CONFIGS[5]);
+    PoolPtr pool;
+    getPool(string(PARSER_CONFIGS[5]), 0, 0, Lease::TYPE_PD, pool);
+    ASSERT_TRUE(pool);
+    ConstElementPtr ctx = pool->getContext();
+    ASSERT_TRUE(ctx);
+
+    // The context should be of type map and not contain any parameters.
+    EXPECT_EQ(Element::map, ctx->getType());
+    EXPECT_EQ(0, ctx->size());
+}
+
+// Test verifies that it's possible to specify parameters in the user context
+// in the address pool.
+TEST_F(Dhcp6ParserTest, pdPoolUserContextlw4over6) {
+    extractConfig(PARSER_CONFIGS[6]);
+    PoolPtr pool;
+    getPool(string(PARSER_CONFIGS[6]), 0, 0, Lease::TYPE_PD, pool);
+    ASSERT_TRUE(pool);
+    ConstElementPtr ctx = pool->getContext();
+    ASSERT_TRUE(ctx);
+
+    // The context should be of type map and contain 4 parameters.
+    EXPECT_EQ(Element::map, ctx->getType());
+    EXPECT_EQ(4, ctx->size());
+    ConstElementPtr ratio   = ctx->get("lw4over6-sharing-ratio");
+    ConstElementPtr v4pool  = ctx->get("lw4over6-v4-pool");
+    ConstElementPtr exclude = ctx->get("lw4over6-sysports-exclude");
+    ConstElementPtr v6len   = ctx->get("lw4over6-bind-prefix-len");
+
+    ASSERT_TRUE(ratio);
+    ASSERT_EQ(Element::integer, ratio->getType());
+    int64_t int_value;
+    EXPECT_NO_THROW(ratio->getValue(int_value));
+    EXPECT_EQ(64L, int_value);
+
+    ASSERT_TRUE(v4pool);
+    ASSERT_EQ(Element::string, v4pool->getType());
+    EXPECT_EQ("192.0.2.0/24", v4pool->stringValue());
+
+    ASSERT_TRUE(exclude);
+    bool bool_value;
+    ASSERT_EQ(Element::boolean, exclude->getType());
+    EXPECT_NO_THROW(exclude->getValue(bool_value));
+    EXPECT_TRUE(bool_value);
+
+    ASSERT_TRUE(v6len);
+    ASSERT_EQ(Element::integer, v6len->getType());
+    EXPECT_NO_THROW(v6len->getValue(int_value));
+    EXPECT_EQ(56L, int_value);
+}
+
+// Test verifies the error message for an incorrect pool range
+// is what we expect.
+TEST_F(Dhcp6ParserTest, invalidPoolRange) {
+    string config = "{ " + genIfaceConfig() + ", \n" +
+        "\"valid-lifetime\": 4000, \n"
+        "\"preferred-lifetime\": 3000, \n"
+        "\"rebind-timer\": 2000, \n"
+        "\"renew-timer\": 1000, \n"
+        "\"subnet6\": [ {  \n"
+        "    \"pools\": [ { \"pool\": \"2001:db8:: - 200:1db8::ffff\" } ], \n"
+        "    \"subnet\": \"2001:db8::/32\"  \n"
+        " } ] \n"
+        "} \n";
+
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config, true));
+
+    ConstElementPtr status;
     EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
     ASSERT_TRUE(status);
-    checkResult(status, 1);
+    int rcode;
+    ConstElementPtr comment = parseAnswer(rcode, status);
+    string text;
+    ASSERT_NO_THROW(text = comment->stringValue());
+
+    EXPECT_EQ(1, rcode);
+    string expected = "Failed to create pool defined by: "
+        "2001:db8::-200:1db8::ffff (<string>:7:26)";
+    EXPECT_EQ(expected, text);
+}
+
+// Test verifies the error message for an outside subnet pool range
+// is what we expect.
+TEST_F(Dhcp6ParserTest, outsideSubnetPool) {
+    string config = "{ " + genIfaceConfig() + ", \n" +
+        "\"valid-lifetime\": 4000, \n"
+        "\"preferred-lifetime\": 3000, \n"
+        "\"rebind-timer\": 2000, \n"
+        "\"renew-timer\": 1000, \n"
+        "\"subnet6\": [ {  \n"
+        "    \"pools\": [ { \"pool\": \"2001:db8:: - 2001:db8::ffff\" } ], \n"
+        "    \"subnet\": \"2001:dc8::/32\"  \n"
+        " } ] \n"
+        "} \n";
+
+    ConstElementPtr json;
+    ASSERT_NO_THROW(json = parseDHCP6(config, true));
+
+    ConstElementPtr status;
+    EXPECT_NO_THROW(status = configureDhcp6Server(srv_, json));
+    ASSERT_TRUE(status);
+    int rcode;
+    ConstElementPtr comment = parseAnswer(rcode, status);
+    string text;
+    ASSERT_NO_THROW(text = comment->stringValue());
+
+    EXPECT_EQ(1, rcode);
+    string expected = "subnet configuration failed: "
+        "a pool of type IA_NA, with the following address range: "
+        "2001:db8::-2001:db8::ffff does not match the prefix of a subnet: "
+        "2001:dc8::/32 to which it is being added (<string>:6:14)";
+    EXPECT_EQ(expected, text);
+}
+
+// Test verifies that empty shared networks are accepted.
+TEST_F(Dhcp6ParserTest, sharedNetworksEmpty) {
+    string config = "{\n"
+        "\"valid-lifetime\": 4000, \n"
+        "\"rebind-timer\": 2000, \n"
+        "\"renew-timer\": 1000, \n"
+        "\"subnet6\": [ {  \n"
+        "    \"subnet\": \"2001:db8::/48\"  \n"
+        " } ],\n"
+        "\"shared-networks\": [ ]\n"
+        "} \n";
+
+    configure(config, CONTROL_RESULT_SUCCESS, "");
+}
+
+// Test verifies that if a shared network is defined, it at least has to have
+// a name.
+TEST_F(Dhcp6ParserTest, sharedNetworksNoName) {
+    string config = "{\n"
+        "\"valid-lifetime\": 4000, \n"
+        "\"rebind-timer\": 2000, \n"
+        "\"renew-timer\": 1000, \n"
+        "\"subnet6\": [ {  \n"
+        "    \"subnet\": \"2001:db8::/48\"  \n"
+        " } ],\n"
+        "\"shared-networks\": [ { } ]\n"
+        "} \n";
+
+    EXPECT_THROW(parseDHCP6(config, true), Dhcp6ParseError);
+}
+
+// Test verifies that empty shared networks are accepted.
+TEST_F(Dhcp6ParserTest, sharedNetworksEmptyName) {
+    string config = "{\n"
+        "\"valid-lifetime\": 4000, \n"
+        "\"rebind-timer\": 2000, \n"
+        "\"renew-timer\": 1000, \n"
+        "\"subnet6\": [ {  \n"
+        "    \"subnet\": \"2001:db8::/48\"  \n"
+        " } ],\n"
+        "\"shared-networks\": [ { \"name\": \"\" } ]\n"
+        "} \n";
+
+    configure(config, CONTROL_RESULT_ERROR,
+              "Shared-network with subnets  is missing mandatory 'name' parameter");
+}
+
+// Test verifies that a degenerated shared-network (no subnets) is
+// accepted.
+TEST_F(Dhcp6ParserTest, sharedNetworksName) {
+    string config = "{\n"
+        "\"subnet6\": [ {  \n"
+        "    \"subnet\": \"2001:db8::/48\",\n"
+        "    \"pools\": [ { \"pool\": \"2001:db8::1 - 2001:db8::ffff\" } ]\n"
+        " } ],\n"
+        "\"shared-networks\": [ { \"name\": \"foo\" } ]\n"
+        "} \n";
+
+    configure(config, CONTROL_RESULT_SUCCESS, "");
+
+    // Now verify that the shared network was indeed configured.
+    CfgSharedNetworks6Ptr cfg_net = CfgMgr::instance().getStagingCfg()
+        ->getCfgSharedNetworks6();
+    ASSERT_TRUE(cfg_net);
+    const SharedNetwork6Collection* nets = cfg_net->getAll();
+    ASSERT_TRUE(nets);
+    ASSERT_EQ(1, nets->size());
+    SharedNetwork6Ptr net = *(nets->begin());
+    ASSERT_TRUE(net);
+    EXPECT_EQ("foo", net->getName());
+
+    // Verify that there are no subnets in this shared-network
+    const Subnet6Collection * subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    EXPECT_EQ(0, subs->size());
+}
+
+// Test verifies that a degenerated shared-network (just one subnet) is
+// accepted. Also tests that, unless explicitly specified, the subnet
+// gets default values.
+TEST_F(Dhcp6ParserTest, sharedNetworks1subnet) {
+    string config = "{\n"
+        "\"shared-networks\": [ {\n"
+        "    \"name\": \"foo\"\n,"
+        "    \"subnet6\": [ { \n"
+        "        \"subnet\": \"2001:db8::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db8::1 - 2001:db8::ffff\" } ]\n"
+        "    } ]\n"
+        " } ]\n"
+        "} \n";
+
+    configure(config, CONTROL_RESULT_SUCCESS, "");
+
+    // Now verify that the shared network was indeed configured.
+    CfgSharedNetworks6Ptr cfg_net = CfgMgr::instance().getStagingCfg()
+        ->getCfgSharedNetworks6();
+    ASSERT_TRUE(cfg_net);
+
+    // There should be exactly one shared subnet.
+    const SharedNetwork6Collection* nets = cfg_net->getAll();
+    ASSERT_TRUE(nets);
+    ASSERT_EQ(1, nets->size());
+
+    SharedNetwork6Ptr net = *(nets->begin());
+    ASSERT_TRUE(net);
+    EXPECT_EQ("foo", net->getName());
+
+    // It should have one subnet. The subnet should have default values.
+    const Subnet6Collection * subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    EXPECT_EQ(1, subs->size());
+    checkSubnet(*subs, "2001:db8::/48", 900, 1800, 3600, 7200);
+
+    // Now make sure the subnet was added to global list of subnets.
+    CfgSubnets6Ptr subnets6 = CfgMgr::instance().getStagingCfg()->getCfgSubnets6();
+    ASSERT_TRUE(subnets6);
+
+    subs = subnets6->getAll();
+    ASSERT_TRUE(subs);
+    checkSubnet(*subs, "2001:db8::/48", 900, 1800, 3600, 7200);
+}
+
+// Test verifies that a proper shared-network (three subnets) is
+// accepted. It verifies several things:
+// - that more than one subnet can be added to shared subnets
+// - that each subnet being part of the shared subnets is also stored in
+//   global subnets collection
+// - that a subnet can inherit global values
+// - that subnet can override global parameters
+// - that overridden parameters only affect one subnet and not others
+TEST_F(Dhcp6ParserTest, sharedNetworks3subnets) {
+    string config = "{\n"
+        "\"renew-timer\": 1000, \n"
+        "\"rebind-timer\": 2000, \n"
+        "\"preferred-lifetime\": 3000, \n"
+        "\"valid-lifetime\": 4000, \n"
+        "\"shared-networks\": [ {\n"
+        "    \"name\": \"foo\"\n,"
+        "    \"subnet6\": [\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db1::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db1::/64\" } ]\n"
+        "    },\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db2::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db2::/64\" } ],\n"
+        "        \"renew-timer\": 2,\n"
+        "        \"rebind-timer\": 22,\n"
+        "        \"preferred-lifetime\": 222,\n"
+        "        \"valid-lifetime\": 2222\n"
+        "    },\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db3::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db3::/64\" } ]\n"
+        "    }\n"
+        "    ]\n"
+        " } ]\n"
+        "} \n";
+
+    configure(config, CONTROL_RESULT_SUCCESS, "");
+
+    // Now verify that the shared network was indeed configured.
+    CfgSharedNetworks6Ptr cfg_net = CfgMgr::instance().getStagingCfg()
+        ->getCfgSharedNetworks6();
+
+    // There is expected one shared subnet.
+    ASSERT_TRUE(cfg_net);
+    const SharedNetwork6Collection* nets = cfg_net->getAll();
+    ASSERT_TRUE(nets);
+    ASSERT_EQ(1, nets->size());
+
+    SharedNetwork6Ptr net = *(nets->begin());
+    ASSERT_TRUE(net);
+
+    EXPECT_EQ("foo", net->getName());
+
+    const Subnet6Collection * subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    EXPECT_EQ(3, subs->size());
+    checkSubnet(*subs, "2001:db1::/48", 1000, 2000, 3000, 4000);
+    checkSubnet(*subs, "2001:db2::/48", 2, 22, 222, 2222);
+    checkSubnet(*subs, "2001:db3::/48", 1000, 2000, 3000, 4000);
+
+    // Now make sure the subnet was added to global list of subnets.
+    CfgSubnets6Ptr subnets6 = CfgMgr::instance().getStagingCfg()->getCfgSubnets6();
+    ASSERT_TRUE(subnets6);
+
+    subs = subnets6->getAll();
+    ASSERT_TRUE(subs);
+    checkSubnet(*subs, "2001:db1::/48", 1000, 2000, 3000, 4000);
+    checkSubnet(*subs, "2001:db2::/48", 2, 22, 222, 2222);
+    checkSubnet(*subs, "2001:db3::/48", 1000, 2000, 3000, 4000);
+}
+
+// This test checks if parameters are derived properly:
+// - global to shared network
+// - shared network to subnet
+// Also, it tests that more than one shared network can be defined.
+TEST_F(Dhcp6ParserTest, sharedNetworksDerive) {
+
+    // We need to fake the interfaces present, because we want to test
+    // interface names inheritance. However, there are sanity checks
+    // on subnet level that would refuse the value if the interface
+    // is not present.
+    IfaceMgrTestConfig iface_config(true);
+
+    // Build some expected interface-id values.
+    const string text1 = "oneone";
+    const string text2 = "twotwo";
+    OptionBuffer buffer1 = OptionBuffer(text1.begin(), text1.end());
+    OptionBuffer buffer2 = OptionBuffer(text2.begin(), text2.end());
+    Option iface_id1(Option::V6, D6O_INTERFACE_ID, buffer1);
+    Option iface_id2(Option::V6, D6O_INTERFACE_ID, buffer2);
+
+    string config = "{\n"
+        "\"renew-timer\": 1, \n"
+        "\"rebind-timer\": 2, \n"
+        "\"preferred-lifetime\": 3,\n"
+        "\"valid-lifetime\": 4, \n"
+        "\"shared-networks\": [ {\n"
+        "    \"name\": \"foo\"\n,"
+        "    \"renew-timer\": 10,\n"
+        "    \"rebind-timer\": 20, \n"
+        "    \"preferred-lifetime\": 30,\n"
+        "    \"valid-lifetime\": 40, \n"
+        "    \"interface-id\": \"oneone\",\n"
+        "    \"relay\": {\n"
+        "        \"ip-address\": \"1111::1\"\n"
+        "    },\n"
+        "    \"rapid-commit\": true,\n"
+        "    \"reservation-mode\": \"disabled\",\n"
+        "    \"subnet6\": [\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db1::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db1::/64\" } ]\n"
+        "    },\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db2::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db2::/64\" } ],\n"
+        "        \"renew-timer\": 100\n,"
+        "        \"rebind-timer\": 200, \n"
+        "        \"preferred-lifetime\": 300,\n"
+        "        \"relay\": {\n"
+        "            \"ip-address\": \"2222::2\"\n"
+        "        },\n"
+        "        \"valid-lifetime\": 400, \n"
+        "        \"interface-id\": \"twotwo\",\n"
+        "        \"rapid-commit\": true,\n"
+        "        \"reservation-mode\": \"out-of-pool\"\n"
+        "    }\n"
+        "    ]\n"
+        " },\n"
+        "{ // second shared-network starts here\n"
+        "    \"name\": \"bar\",\n"
+        "    \"subnet6\": [\n"
+        "    {\n"
+        "        \"subnet\": \"2001:db3::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db3::/64\" } ]\n"
+        "    }\n"
+        "    ]\n"
+        "} ]\n"
+        "} \n";
+
+    configure(config, CONTROL_RESULT_SUCCESS, "");
+
+    // Now verify that the shared network was indeed configured.
+    CfgSharedNetworks6Ptr cfg_net = CfgMgr::instance().getStagingCfg()
+        ->getCfgSharedNetworks6();
+
+    // Two shared networks are expeced.
+    ASSERT_TRUE(cfg_net);
+    const SharedNetwork6Collection* nets = cfg_net->getAll();
+    ASSERT_TRUE(nets);
+    ASSERT_EQ(2, nets->size());
+
+    // Let's check the first one.
+    SharedNetwork6Ptr net = nets->at(0);
+    ASSERT_TRUE(net);
+
+    const Subnet6Collection * subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    EXPECT_EQ(2, subs->size());
+
+    // For the first subnet, the renew-timer should be 10, because it was
+    // derived from shared-network level. Other parameters a derived
+    // from global scope to shared-network level and later again to
+    // subnet6 level.
+    Subnet6Ptr s = checkSubnet(*subs, "2001:db1::/48", 10, 20, 30, 40);
+    ASSERT_TRUE(s);
+    ASSERT_TRUE(s->getInterfaceId());
+    EXPECT_TRUE(iface_id1.equals(s->getInterfaceId()));
+    EXPECT_EQ(IOAddress("1111::1"), s->getRelayInfo().addr_);
+    EXPECT_TRUE(s->getRapidCommit());
+    EXPECT_EQ(Network::HR_DISABLED, s->getHostReservationMode());
+
+    // For the second subnet, the renew-timer should be 100, because it
+    // was specified explicitly. Other parameters a derived
+    // from global scope to shared-network level and later again to
+    // subnet6 level.
+    s = checkSubnet(*subs, "2001:db2::/48", 100, 200, 300, 400);
+    ASSERT_TRUE(s->getInterfaceId());
+    EXPECT_TRUE(iface_id2.equals(s->getInterfaceId()));
+    EXPECT_EQ(IOAddress("2222::2"), s->getRelayInfo().addr_);
+    EXPECT_TRUE(s->getRapidCommit());
+    EXPECT_EQ(Network::HR_OUT_OF_POOL, s->getHostReservationMode());
+
+    // Ok, now check the second shared subnet.
+    net = nets->at(1);
+    ASSERT_TRUE(net);
+
+    subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    EXPECT_EQ(1, subs->size());
+
+    // This subnet should derive its renew-timer from global scope.
+    s = checkSubnet(*subs, "2001:db3::/48", 1, 2, 3, 4);
+    EXPECT_FALSE(s->getInterfaceId());
+    EXPECT_EQ(IOAddress("::"), s->getRelayInfo().addr_);
+    EXPECT_FALSE(s->getRapidCommit());
+    EXPECT_EQ(Network::HR_ALL, s->getHostReservationMode());
+}
+
+// Since it is not allowed to define both interface-id and interface
+// for the same subnet, we need dedicated test that will check
+// interface separately.
+TEST_F(Dhcp6ParserTest, sharedNetworksDeriveInterfaces) {
+
+    // We need to fake the interfaces present, because we want to test
+    // interface names inheritance. However, there are sanity checks
+    // on subnet level that would refuse the value if the interface
+    // is not present.
+    IfaceMgrTestConfig iface_config(true);
+
+    string config = "{\n"
+        "\"shared-networks\": [ {\n"
+        "    \"name\": \"foo\"\n,"
+        "    \"interface\": \"eth0\",\n"
+        "    \"subnet6\": [\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db1::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db1::/64\" } ]\n"
+        "    },\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db2::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db2::/64\" } ],\n"
+        "        \"interface\": \"eth0\"\n"
+        "    }\n"
+        "    ]\n"
+        " },\n"
+        "{ // second shared-network starts here\n"
+        "    \"name\": \"bar\",\n"
+        "    \"subnet6\": [\n"
+        "    {\n"
+        "        \"subnet\": \"2001:db3::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db3::/64\" } ]\n"
+        "    }\n"
+        "    ]\n"
+        "} ]\n"
+        "} \n";
+
+    configure(config, CONTROL_RESULT_SUCCESS, "");
+
+    // Now verify that the shared network was indeed configured.
+    CfgSharedNetworks6Ptr cfg_net = CfgMgr::instance().getStagingCfg()
+        ->getCfgSharedNetworks6();
+
+    // Two shared networks are expeced.
+    ASSERT_TRUE(cfg_net);
+    const SharedNetwork6Collection* nets = cfg_net->getAll();
+    ASSERT_TRUE(nets);
+    ASSERT_EQ(2, nets->size());
+
+    // Let's check the first one.
+    SharedNetwork6Ptr net = nets->at(0);
+    ASSERT_TRUE(net);
+
+    const Subnet6Collection * subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    EXPECT_EQ(2, subs->size());
+
+    // For the first subnet, the renew-timer should be 10, because it was
+    // derived from shared-network level. Other parameters a derived
+    // from global scope to shared-network level and later again to
+    // subnet6 level.
+    Subnet6Ptr s = checkSubnet(*subs, "2001:db1::/48", 900, 1800, 3600, 7200);
+    ASSERT_TRUE(s);
+    EXPECT_EQ("eth0", s->getIface());
+
+    // For the second subnet, the renew-timer should be 100, because it
+    // was specified explicitly. Other parameters a derived
+    // from global scope to shared-network level and later again to
+    // subnet6 level.
+    checkSubnet(*subs, "2001:db2::/48", 900, 1800, 3600, 7200);
+    EXPECT_EQ("eth0", s->getIface());
+
+    // Ok, now check the second shared subnet.
+    net = nets->at(1);
+    ASSERT_TRUE(net);
+
+    subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    EXPECT_EQ(1, subs->size());
+
+    // This subnet should derive its renew-timer from global scope.
+    s = checkSubnet(*subs, "2001:db3::/48", 900, 1800, 3600, 7200);
+    EXPECT_EQ("", s->getIface());
+}
+
+
+// It is not allowed to have different values for interfaces names is subnets
+// in the same shared network.
+TEST_F(Dhcp6ParserTest, sharedNetworksInterfacesMixed) {
+
+    // We need to fake the interfaces present, because we want to test
+    // interface names inheritance. However, there are sanity checks
+    // on subnet level that would refuse the value if the interface
+    // is not present.
+    IfaceMgrTestConfig iface_config(true);
+
+    string config = "{\n"
+        "\"shared-networks\": [ {\n"
+        "    \"name\": \"foo\"\n,"
+        "    \"subnet6\": [\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db1::/48\",\n"
+        "        \"interface\": \"eth0\"\n"
+        "    },\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db2::/48\",\n"
+        "        \"interface\": \"eth1\"\n"
+        "    }\n"
+        "    ]\n"
+        " } ]\n"
+        "} \n";
+
+    configure(config, CONTROL_RESULT_ERROR, "Subnet 2001:db2::/48 has specified "
+              "interface eth1, but earlier subnet in the same shared-network "
+              "or the shared-network itself used eth0");
+}
+
+// This test checks if client-class is derived properly.
+TEST_F(Dhcp6ParserTest, sharedNetworksDeriveClientClass) {
+
+    string config = "{\n"
+        "\"shared-networks\": [ {\n"
+        "    \"name\": \"foo\"\n,"
+        "    \"client-class\": \"alpha\",\n"
+        "    \"subnet6\": [\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db1::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db1::/64\" } ]\n"
+        "    },\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db2::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db2::/64\" } ],\n"
+        "        \"client-class\": \"beta\"\n"
+        "    }\n"
+        "    ]\n"
+        " },\n"
+        "{ // second shared-network starts here\n"
+        "    \"name\": \"bar\",\n"
+        "    \"subnet6\": [\n"
+        "    {\n"
+        "        \"subnet\": \"2001:db3::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db3::/64\" } ]\n"
+        "    }\n"
+        "    ]\n"
+        "} ]\n"
+        "} \n";
+
+    configure(config, CONTROL_RESULT_SUCCESS, "");
+
+    // Now verify that the shared network was indeed configured.
+    CfgSharedNetworks6Ptr cfg_net = CfgMgr::instance().getStagingCfg()
+        ->getCfgSharedNetworks6();
+
+    // Two shared networks are expeced.
+    ASSERT_TRUE(cfg_net);
+    const SharedNetwork6Collection* nets = cfg_net->getAll();
+    ASSERT_TRUE(nets);
+    ASSERT_EQ(2, nets->size());
+
+    // Let's check the first one.
+    SharedNetwork6Ptr net = nets->at(0);
+    ASSERT_TRUE(net);
+
+    auto classes = net->getClientClasses();
+    EXPECT_TRUE(classes.contains("alpha"));
+
+    const Subnet6Collection * subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    EXPECT_EQ(2, subs->size());
+
+    // For the first subnet, the client-class should be inherited from
+    // shared-network level.
+    Subnet6Ptr s = checkSubnet(*subs, "2001:db1::/48", 900, 1800, 3600, 7200);
+    ASSERT_TRUE(s);
+    classes = s->getClientClasses();
+    EXPECT_TRUE(classes.contains("alpha"));
+
+    // For the second subnet, the values are overridden on subnet level.
+    // The value should not be inherited.
+    s = checkSubnet(*subs, "2001:db2::/48", 900, 1800, 3600, 7200);
+    ASSERT_TRUE(s);
+    classes = s->getClientClasses();
+    EXPECT_TRUE(classes.contains("beta")); // beta defined on subnet level
+    EXPECT_FALSE(classes.contains("alpha")); // alpha defined on shared-network level
+
+    // Ok, now check the second shared network. It doesn't have
+    // anything defined on shared-network or subnet level, so
+    // everything should have default values.
+    net = nets->at(1);
+    ASSERT_TRUE(net);
+
+    subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    EXPECT_EQ(1, subs->size());
+
+    // This subnet should derive its renew-timer from global scope.
+    s = checkSubnet(*subs, "2001:db3::/48", 900, 1800, 3600, 7200);
+    classes = s->getClientClasses();
+    EXPECT_TRUE(classes.empty());
+}
+
+// Tests if rapid-commit is derived properly.
+TEST_F(Dhcp6ParserTest, sharedNetworksRapidCommit) {
+
+    string config = "{\n"
+        "\"shared-networks\": [ {\n"
+        "    \"name\": \"frog\"\n,"
+        "    \"rapid-commit\": true,\n"
+        "    \"subnet6\": [\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db1::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db1::/64\" } ]\n"
+        "    },\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db2::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db2::/64\" } ],\n"
+        "        \"client-class\": \"beta\"\n"
+        "    }\n"
+        "    ]\n"
+        " },\n"
+        "{ // second shared-network starts here\n"
+        "    \"name\": \"bar\",\n"
+        "    \"rapid-commit\": false,\n"
+        "    \"subnet6\": [\n"
+        "    {\n"
+        "        \"subnet\": \"2001:db3::/48\",\n"
+        "        \"pools\": [ { \"pool\": \"2001:db3::/64\" } ]\n"
+        "    }\n"
+        "    ]\n"
+        "} ]\n"
+        "} \n";
+
+    configure(config, CONTROL_RESULT_SUCCESS, "");
+
+    // Now verify that the shared network was indeed configured.
+    CfgSharedNetworks6Ptr cfg_net = CfgMgr::instance().getStagingCfg()
+        ->getCfgSharedNetworks6();
+
+    // Two shared networks are expeced.
+    ASSERT_TRUE(cfg_net);
+    const SharedNetwork6Collection* nets = cfg_net->getAll();
+    ASSERT_TRUE(nets);
+    ASSERT_EQ(2, nets->size());
+
+    // Let's check the first one.
+    SharedNetwork6Ptr net = nets->at(0);
+    ASSERT_TRUE(net);
+
+    const Subnet6Collection * subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    ASSERT_EQ(2, subs->size());
+    EXPECT_TRUE(subs->at(0)->getRapidCommit());
+    EXPECT_TRUE(subs->at(1)->getRapidCommit());
+
+    // Ok, now check the second shared network. It doesn't have
+    // anything defined on shared-network or subnet level, so
+    // everything should have default values.
+    net = nets->at(1);
+    ASSERT_TRUE(net);
+
+    subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    EXPECT_EQ(1, subs->size());
+
+    // This subnet should derive its renew-timer from global scope.
+    EXPECT_FALSE(subs->at(0)->getRapidCommit());
+}
+
+// Tests that non-matching rapid-commit setting for subnets belonging to a
+// shared network cause configuration error.
+TEST_F(Dhcp6ParserTest, sharedNetworksRapidCommitMix) {
+
+    string config = "{\n"
+        "\"shared-networks\": [ {\n"
+        "    \"name\": \"frog\"\n,"
+        "    \"subnet6\": [\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db1::/48\",\n"
+        "        \"rapid-commit\": true,\n"
+        "        \"pools\": [ { \"pool\": \"2001:db1::/64\" } ]\n"
+        "    },\n"
+        "    { \n"
+        "        \"subnet\": \"2001:db2::/48\",\n"
+        "        \"rapid-commit\": false,\n"
+        "        \"pools\": [ { \"pool\": \"2001:db2::/64\" } ],\n"
+        "        \"client-class\": \"beta\"\n"
+        "    }\n"
+        "    ]\n"
+        " } ]\n"
+        "} \n";
+
+    configure(config, CONTROL_RESULT_ERROR, "All subnets in a shared network "
+              "must have the same rapid-commit value. Subnet 2001:db2::/48 has "
+              "specified rapid-commit false, but earlier subnet in the same "
+              "shared-network or the shared-network itself used rapid-commit true");
+}
+
+// This test checks comments. Please keep it last.
+TEST_F(Dhcp6ParserTest, comments) {
+
+    string config = PARSER_CONFIGS[7];
+    extractConfig(config);
+    configure(config, CONTROL_RESULT_SUCCESS, "");
+
+    // Check global user context.
+    ConstElementPtr ctx = CfgMgr::instance().getStagingCfg()->getContext();
+    ASSERT_TRUE(ctx);
+    ASSERT_EQ(1, ctx->size());
+    ASSERT_TRUE(ctx->get("comment"));
+    EXPECT_EQ("\"A DHCPv6 server\"", ctx->get("comment")->str());
+
+    // There is a server id.
+    ConstCfgDUIDPtr duid = CfgMgr::instance().getStagingCfg()->getCfgDUID();
+    ASSERT_TRUE(duid);
+    EXPECT_EQ(DUID::DUID_LL, duid->getType());
+
+    // Check server id user context.
+    ConstElementPtr ctx_duid = duid->getContext();
+    ASSERT_TRUE(ctx_duid);
+    ASSERT_EQ(1, ctx_duid->size());
+    ASSERT_TRUE(ctx_duid->get("comment"));
+    EXPECT_EQ("\"DHCPv6 specific\"", ctx_duid->get("comment")->str());
+
+    // There is a network interface configuration.
+    ConstCfgIfacePtr iface = CfgMgr::instance().getStagingCfg()->getCfgIface();
+    ASSERT_TRUE(iface);
+
+    // Check network interface configuration user context.
+    ConstElementPtr ctx_iface = iface->getContext();
+    ASSERT_TRUE(ctx_iface);
+    ASSERT_EQ(1, ctx_iface->size());
+    ASSERT_TRUE(ctx_iface->get("comment"));
+    EXPECT_EQ("\"Use wildcard\"", ctx_iface->get("comment")->str());
+
+    // There is a global option definition.
+    const OptionDefinitionPtr& opt_def =
+        LibDHCP::getRuntimeOptionDef("isc", 100);
+    ASSERT_TRUE(opt_def);
+    EXPECT_EQ("foo", opt_def->getName());
+    EXPECT_EQ(100, opt_def->getCode());
+    EXPECT_FALSE(opt_def->getArrayType());
+    EXPECT_EQ(OPT_IPV6_ADDRESS_TYPE, opt_def->getType());
+    EXPECT_TRUE(opt_def->getEncapsulatedSpace().empty());
+
+    // Check option definition user context.
+    ConstElementPtr ctx_opt_def = opt_def->getContext();
+    ASSERT_TRUE(ctx_opt_def);
+    ASSERT_EQ(1, ctx_opt_def->size());
+    ASSERT_TRUE(ctx_opt_def->get("comment"));
+    EXPECT_EQ("\"An option definition\"", ctx_opt_def->get("comment")->str());
+
+    // There is an option descriptor aka option data.
+    const OptionDescriptor& opt_desc =
+        CfgMgr::instance().getStagingCfg()->getCfgOption()->
+            get(DHCP6_OPTION_SPACE, D6O_SUBSCRIBER_ID);
+    ASSERT_TRUE(opt_desc.option_);
+    EXPECT_EQ(D6O_SUBSCRIBER_ID, opt_desc.option_->getType());
+
+    // Check option descriptor user context.
+    ConstElementPtr ctx_opt_desc = opt_desc.getContext();
+    ASSERT_TRUE(ctx_opt_desc);
+    ASSERT_EQ(1, ctx_opt_desc->size());
+    ASSERT_TRUE(ctx_opt_desc->get("comment"));
+    EXPECT_EQ("\"Set option value\"", ctx_opt_desc->get("comment")->str());
+
+    // And there there are some client classes.
+    const ClientClassDictionaryPtr& dict =
+        CfgMgr::instance().getStagingCfg()->getClientClassDictionary();
+    ASSERT_TRUE(dict);
+    EXPECT_EQ(3, dict->getClasses()->size());
+    ClientClassDefPtr cclass = dict->findClass("all");
+    ASSERT_TRUE(cclass);
+    EXPECT_EQ("all", cclass->getName());
+    EXPECT_EQ("'' == ''", cclass->getTest());
+
+    // Check client class user context.
+    ConstElementPtr ctx_class = cclass->getContext();
+    ASSERT_TRUE(ctx_class);
+    ASSERT_EQ(1, ctx_class->size());
+    ASSERT_TRUE(ctx_class->get("comment"));
+    EXPECT_EQ("\"match all\"", ctx_class->get("comment")->str());
+
+    // The 'none' class has no user-context/comment.
+    cclass = dict->findClass("none");
+    ASSERT_TRUE(cclass);
+    EXPECT_EQ("none", cclass->getName());
+    EXPECT_EQ("", cclass->getTest());
+    EXPECT_FALSE(cclass->getContext());
+
+    // The 'both' class has a user context and a comment.
+    cclass = dict->findClass("both");
+    EXPECT_EQ("both", cclass->getName());
+    EXPECT_EQ("", cclass->getTest());
+    ctx_class = cclass->getContext();
+    ASSERT_TRUE(ctx_class);
+    ASSERT_EQ(2, ctx_class->size());
+    ASSERT_TRUE(ctx_class->get("comment"));
+    EXPECT_EQ("\"a comment\"", ctx_class->get("comment")->str());
+    ASSERT_TRUE(ctx_class->get("version"));
+    EXPECT_EQ("1", ctx_class->get("version")->str());
+
+    // There is a control socket.
+    ConstElementPtr socket =
+        CfgMgr::instance().getStagingCfg()->getControlSocketInfo();
+    ASSERT_TRUE(socket);
+    ASSERT_TRUE(socket->get("socket-type"));
+    EXPECT_EQ("\"unix\"", socket->get("socket-type")->str());
+    ASSERT_TRUE(socket->get("socket-name"));
+    EXPECT_EQ("\"/tmp/kea6-ctrl-socket\"", socket->get("socket-name")->str());
+
+    // Check control socket comment and user context.
+    ConstElementPtr ctx_socket = socket->get("user-context");
+    ASSERT_EQ(1, ctx_socket->size());
+    ASSERT_TRUE(ctx_socket->get("comment"));
+    EXPECT_EQ("\"Indirect comment\"", ctx_socket->get("comment")->str());
+
+    // Now verify that the shared network was indeed configured.
+    const CfgSharedNetworks6Ptr& cfg_net =
+        CfgMgr::instance().getStagingCfg()->getCfgSharedNetworks6();
+    ASSERT_TRUE(cfg_net);
+    const SharedNetwork6Collection* nets = cfg_net->getAll();
+    ASSERT_TRUE(nets);
+    ASSERT_EQ(1, nets->size());
+    SharedNetwork6Ptr net = nets->at(0);
+    ASSERT_TRUE(net);
+    EXPECT_EQ("foo", net->getName());
+
+    // Check shared network user context.
+    ConstElementPtr ctx_net = net->getContext();
+    ASSERT_TRUE(ctx_net);
+    ASSERT_EQ(1, ctx_net->size());
+    ASSERT_TRUE(ctx_net->get("comment"));
+    EXPECT_EQ("\"A shared network\"", ctx_net->get("comment")->str());
+
+    // The shared network has a subnet.
+    const Subnet6Collection* subs = net->getAllSubnets();
+    ASSERT_TRUE(subs);
+    ASSERT_EQ(1, subs->size());
+    Subnet6Ptr sub = subs->at(0);
+    ASSERT_TRUE(sub);
+
+    // Check subnet user context.
+    ConstElementPtr ctx_sub = sub->getContext();
+    ASSERT_TRUE(ctx_sub);
+    ASSERT_EQ(1, ctx_sub->size());
+    ASSERT_TRUE(ctx_sub->get("comment"));
+    EXPECT_EQ("\"A subnet\"", ctx_sub->get("comment")->str());
+    EXPECT_EQ(100, sub->getID());
+    EXPECT_EQ("2001:db1::/48", sub->toText());
+
+    // The subnet has a pool.
+    const PoolCollection& pools = sub->getPools(Lease::TYPE_NA);
+    ASSERT_EQ(1, pools.size());
+    PoolPtr pool = pools.at(0);
+    ASSERT_TRUE(pool);
+
+    // Check pool user context.
+    ConstElementPtr ctx_pool = pool->getContext();
+    ASSERT_TRUE(ctx_pool);
+    ASSERT_EQ(1, ctx_pool->size());
+    ASSERT_TRUE(ctx_pool->get("comment"));
+    EXPECT_EQ("\"A pool\"", ctx_pool->get("comment")->str());
+
+    // The subnet has a prefix pool.
+    const PoolCollection& pdpools = sub->getPools(Lease::TYPE_PD);
+    ASSERT_EQ(1, pdpools.size());
+    PoolPtr pdpool = pdpools.at(0);
+    ASSERT_TRUE(pdpool);
+
+    // Check prefix pool user context.
+    ConstElementPtr ctx_pdpool = pdpool->getContext();
+    ASSERT_TRUE(ctx_pdpool);
+    ASSERT_EQ(1, ctx_pdpool->size());
+    ASSERT_TRUE(ctx_pdpool->get("comment"));
+    EXPECT_EQ("\"A prefix pool\"", ctx_pdpool->get("comment")->str());
+
+    // The subnet has a host reservation.
+    uint8_t hw[] = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+    HWAddrPtr hwaddr(new HWAddr(hw, sizeof(hw), HTYPE_ETHER));
+    ConstHostPtr host =
+        CfgMgr::instance().getStagingCfg()->getCfgHosts()->get6(100, DuidPtr(), hwaddr);
+    ASSERT_TRUE(host);
+    EXPECT_EQ(Host::IDENT_HWADDR, host->getIdentifierType());
+    EXPECT_EQ("aa:bb:cc:dd:ee:ff", host->getHWAddress()->toText(false));
+    EXPECT_FALSE(host->getDuid());
+    EXPECT_EQ(0, host->getIPv4SubnetID());
+    EXPECT_EQ(100, host->getIPv6SubnetID());
+    EXPECT_EQ("foo.example.com", host->getHostname());
+
+    // Check host user context.
+    ConstElementPtr ctx_host = host->getContext();
+    ASSERT_TRUE(ctx_host);
+    ASSERT_EQ(1, ctx_host->size());
+    ASSERT_TRUE(ctx_host->get("comment"));
+    EXPECT_EQ("\"A host reservation\"", ctx_host->get("comment")->str());
+
+    // The host reservation has an option data.
+    ConstCfgOptionPtr opts = host->getCfgOption6();
+    ASSERT_TRUE(opts);
+    EXPECT_FALSE(opts->empty());
+    const OptionDescriptor& host_desc =
+        opts->get(DHCP6_OPTION_SPACE, D6O_DOMAIN_SEARCH);
+    ASSERT_TRUE(host_desc.option_);
+    EXPECT_EQ(D6O_DOMAIN_SEARCH, host_desc.option_->getType());
+
+    // Check embedded option data user context.
+    ConstElementPtr ctx_host_desc = host_desc.getContext();
+    ASSERT_TRUE(ctx_host_desc);
+    ASSERT_EQ(1, ctx_host_desc->size());
+    ASSERT_TRUE(ctx_host_desc->get("comment"));
+    EXPECT_EQ("\"An option in a reservation\"",
+              ctx_host_desc->get("comment")->str());
+
+    // Finally dynamic DNS update configuration.
+    const D2ClientConfigPtr& d2 =
+        CfgMgr::instance().getStagingCfg()->getD2ClientConfig();
+    ASSERT_TRUE(d2);
+    EXPECT_FALSE(d2->getEnableUpdates());
+
+    // Check dynamic DNS update configuration user context.
+    ConstElementPtr ctx_d2 = d2->getContext();
+    ASSERT_TRUE(ctx_d2);
+    ASSERT_EQ(1, ctx_d2->size());
+    ASSERT_TRUE(ctx_d2->get("comment"));
+    EXPECT_EQ("\"No dynamic DNS\"", ctx_d2->get("comment")->str());
 }
 
 };

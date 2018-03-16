@@ -1,4 +1,4 @@
-// Copyright (C) 2014-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2014-2016 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -9,7 +9,7 @@
 #include <dhcp/duid.h>
 #include <dhcpsrv/csv_lease_file6.h>
 #include <dhcpsrv/lease.h>
-#include <dhcpsrv/tests/lease_file_io.h>
+#include <dhcpsrv/testutils/lease_file_io.h>
 #include <gtest/gtest.h>
 #include <sstream>
 
@@ -448,6 +448,48 @@ TEST_F(CSVLeaseFile6Test, downGrade) {
     ASSERT_TRUE(lease->hwaddr_);
     EXPECT_EQ("0a:0b:0c:0d:0e", lease->hwaddr_->toText(false));
     EXPECT_EQ(Lease::STATE_DECLINED, lease->state_);
+    }
+}
+
+// Verifies that leases with no DUID are invalid, and that leases
+// with the "Empty" DUID (1 byte duid = 0x0) are valid only when 
+// in the declined state.
+TEST_F(CSVLeaseFile6Test, declinedLeaseTest) {
+    io_.writeFile("address,duid,valid_lifetime,expire,subnet_id,"
+                  "pref_lifetime,lease_type,iaid,prefix_len,fqdn_fwd,"
+                  "fqdn_rev,hostname,hwaddr,state\n"
+                  "2001:db8:1::1,00,"
+                  "200,200,8,100,0,7,0,1,1,host.example.com,,0\n"
+                  "2001:db8:1::1,,"
+                  "200,200,8,100,0,7,0,1,1,host.example.com,,0\n"
+                  "2001:db8:1::1,00,"
+                  "200,200,8,100,0,7,0,1,1,host.example.com,,1\n");
+
+    CSVLeaseFile6 lf(filename_);
+    ASSERT_NO_THROW(lf.open());
+    EXPECT_FALSE(lf.needsConversion());
+    EXPECT_EQ(util::VersionedCSVFile::CURRENT, lf.getInputSchemaState());
+    Lease6Ptr lease;
+
+    {
+    SCOPED_TRACE("\"Empty\" DUID and not declined, invalid");
+    EXPECT_FALSE(lf.next(lease));
+    ASSERT_FALSE(lease);
+    EXPECT_EQ(lf.getReadErrs(),1);
+    }
+
+    {
+    SCOPED_TRACE("Missing (blank) DUID and not declined, invalid");
+    EXPECT_FALSE(lf.next(lease));
+    ASSERT_FALSE(lease);
+    EXPECT_EQ(lf.getReadErrs(),2);
+    }
+
+    {
+    SCOPED_TRACE("\"Empty\" DUID and declined, valid");
+    EXPECT_TRUE(lf.next(lease));
+    ASSERT_TRUE(lease);
+    EXPECT_EQ(lf.getReadErrs(),2);
     }
 }
 

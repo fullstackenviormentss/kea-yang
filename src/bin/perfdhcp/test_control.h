@@ -1,4 +1,4 @@
-// Copyright (C) 2012-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2012-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -15,6 +15,7 @@
 #include <dhcp/dhcp6.h>
 #include <dhcp/pkt4.h>
 #include <dhcp/pkt6.h>
+#include <util/random/random_number_generator.h>
 
 #include <boost/noncopyable.hpp>
 #include <boost/shared_ptr.hpp>
@@ -134,6 +135,18 @@ public:
     typedef std::vector<uint8_t> TemplateBuffer;
     /// Packet template buffers list.
     typedef std::vector<TemplateBuffer> TemplateBufferCollection;
+
+    /// @brief Delay the exit by a fixed given time to catch up to all exchanges
+    ///     that were already started.
+    /// @return true if need to wait, false = ok to exit now
+    bool waitToExit() const;
+
+    /// @brief Check if the program is in that period where the program was
+    ///     bound to exit, but was delayed by lateExit().
+    bool hasLateExitCommenced() const;
+
+    /// @brief Checks if all expected packets were already received
+    bool haveAllPacketsBeenReceived() const;
 
     /// \brief Socket wrapper structure.
     ///
@@ -280,6 +293,9 @@ protected:
     /// Default constructor is protected as the object can be created
     /// only via \ref instance method.
     TestControl();
+
+    /// Generate uniformly distributed integers in range of [min, max]
+    isc::util::random::UniformRandomIntegerGenerator number_generator_;
 
     /// \brief Check if test exit conditions fulfilled.
     ///
@@ -465,7 +481,7 @@ protected:
     /// is ignored).
     /// \throw isc::BadValue if \ref generateMacAddress throws.
     /// \return vector representing DUID.
-    std::vector<uint8_t> generateDuid(uint8_t& randomized) const;
+    std::vector<uint8_t> generateDuid(uint8_t& randomized);
 
     /// \brief Generate MAC address.
     ///
@@ -481,7 +497,7 @@ protected:
     /// \throw isc::BadValue if MAC address template (default or specified
     /// from the command line) has invalid size (expected 6 octets).
     /// \return generated MAC address.
-    std::vector<uint8_t> generateMacAddress(uint8_t& randomized) const;
+    std::vector<uint8_t> generateMacAddress(uint8_t& randomized);
 
     /// \brief generate transaction id.
     ///
@@ -656,7 +672,7 @@ protected:
     /// being sent to the server. It collects first packets of each
     /// type and keeps them around until test finishes. Then they
     /// are printed to the user. If packet of specified type has
-    /// been already stored this function perfroms no operation.
+    /// been already stored this function performs no operation.
     /// This function does not perform sanity check if packet
     /// pointer is valid. Make sure it is before calling it.
     ///
@@ -671,7 +687,7 @@ protected:
     /// being sent to the server. It collects first packets of each
     /// type and keeps them around until test finishes. Then they
     /// are printed to the user. If packet of specified type has
-    /// been already stored this function perfroms no operation.
+    /// been already stored this function performs no operation.
     /// This function does not perform sanity check if packet
     /// pointer is valid. Make sure it is before calling it.
     ///
@@ -1132,7 +1148,7 @@ protected:
     static bool interrupted_;  ///< Is program interrupted.
 };
 
-} // namespace perfdhcp
-} // namespace isc
+}  // namespace perfdhcp
+}  // namespace isc
 
 #endif // TEST_CONTROL_H

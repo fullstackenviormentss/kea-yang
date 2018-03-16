@@ -1,4 +1,4 @@
-// Copyright (C) 2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2015-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,7 +7,10 @@
 #ifndef CLIENT_CLASS_DEF_H
 #define CLIENT_CLASS_DEF_H
 
+#include <cc/cfg_to_element.h>
+#include <cc/user_context.h>
 #include <dhcpsrv/cfg_option.h>
+#include <dhcpsrv/cfg_option_def.h>
 #include <eval/token.h>
 #include <exceptions/exceptions.h>
 
@@ -37,7 +40,7 @@ public:
 };
 
 /// @brief Embodies a single client class definition
-class ClientClassDef {
+class ClientClassDef : public UserContext, public isc::data::CfgToElement {
 public:
     /// @brief Constructor
     ///
@@ -69,6 +72,22 @@ public:
     ///
     /// @param match_expr the expression to assign the class
     void setMatchExpr(const ExpressionPtr& match_expr);
+
+    /// @brief Fetches the class's original match expression
+    std::string getTest() const;
+
+    /// @brief Sets the class's original match expression
+    ///
+    /// @param test the original expression to assign the class
+    void setTest(const std::string& test);
+
+    /// @brief Fetches the class's option definitions
+    const CfgOptionDefPtr& getCfgOptionDef() const;
+
+    /// @brief Sets the class's option definition collection
+    ///
+    /// @param cfg_option_def the option definitions to assign the class
+    void setCfgOptionDef(const CfgOptionDefPtr& cfg_option_def);
 
     /// @brief Fetches the class's option collection
     const CfgOptionPtr& getCfgOption() const;
@@ -106,6 +125,50 @@ public:
     /// @brief Provides a convenient text representation of the class
     friend std::ostream& operator<<(std::ostream& os, const ClientClassDef& x);
 
+    /// @brief returns next-server value
+    /// @return next-server value
+    const asiolink::IOAddress& getNextServer() const {
+        return (next_server_);
+    }
+
+    /// @brief sets the next-server value
+    ///
+    /// @param addr the value to be set
+    void setNextServer(const asiolink::IOAddress& addr) {
+        next_server_ = addr;
+    }
+
+    /// @brief sets the server-name value
+    ///
+    /// @param sname the value to be set
+    void setSname(const std::string& sname) {
+        sname_ = sname;
+    }
+
+    /// @brief returns server-hostname value
+    /// @return the vector that contains server-hostname (may be empty if not defined)
+    const std::string& getSname() const {
+        return (sname_);
+    }
+
+    /// @brief sets the boot-file-name value
+    ///
+    /// @param filename the value to be set
+    void setFilename(const std::string& filename) {
+        filename_ = filename;
+    }
+
+    /// @brief returns boot-file-name value
+    /// @return the vector that contains boot-file-name (may be empty if not defined)
+    const std::string& getFilename() const {
+        return (filename_);
+    }
+
+    /// @brief Unparse a configuration object
+    ///
+    /// @return a pointer to unparsed configuration
+    virtual isc::data::ElementPtr toElement() const;
+
 private:
     /// @brief Unique text identifier by which this class is known.
     std::string name_;
@@ -114,8 +177,33 @@ private:
     /// this class.
     ExpressionPtr match_expr_;
 
+    /// @brief The original expression which determines membership in
+    /// this class.
+    std::string test_;
+
+    /// @brief The option definition configuration for this class
+    CfgOptionDefPtr cfg_option_def_;
+
     /// @brief The option data configuration for this class
     CfgOptionPtr cfg_option_;
+
+    /// @brief Next server field
+    /// If set by the next-server parameter, this value will be set
+    /// in the siaddr field of the DHCPv4 packet.
+    asiolink::IOAddress next_server_;
+
+    /// @brief server-hostname
+    /// If set by the server-hostname parameter, this value will be
+    /// set in the sname field of the DHCPv4 packet.
+    /// This can be up to 64 octets long.
+    std::string sname_;
+
+    /// @brief boot-file-name
+    /// If set by the boot-file-name parameter, this value will be
+    /// set in the file field of the DHCPv4 packet.
+    /// This can be up to 128 octets long.
+    std::string filename_;
+
 };
 
 /// @brief a pointer to an ClientClassDef
@@ -131,7 +219,7 @@ typedef boost::shared_ptr<ClientClassDefMap> ClientClassDefMapPtr;
 typedef std::pair<std::string, ClientClassDefPtr> ClientClassMapPair;
 
 /// @brief Maintains a list of ClientClassDef's
-class ClientClassDictionary {
+class ClientClassDictionary : public isc::data::CfgToElement {
 
 public:
     /// @brief Constructor
@@ -146,13 +234,24 @@ public:
     ///
     /// @param name Name to assign to this class
     /// @param match_expr Expression the class will use to determine membership
+    /// @param test Original version of match_expr
     /// @param options Collection of options members should be given
+    /// @param defs Option definitions (optional)
+    /// @param user_context User context (optional)
+    /// @param next_server next-server value for this class (optional)
+    /// @param sname server-name value for this class (optional)
+    /// @param filename boot-file-name value for this class (optional)
     ///
     /// @throw DuplicateClientClassDef if class already exists within the
     /// dictionary.  See @ref dhcp::ClientClassDef::ClientClassDef() for
     /// others.
     void addClass(const std::string& name, const ExpressionPtr& match_expr,
-                  const CfgOptionPtr& options);
+                  const std::string& test, const CfgOptionPtr& options,
+                  CfgOptionDefPtr defs = CfgOptionDefPtr(),
+                  isc::data::ConstElementPtr user_context = isc::data::ConstElementPtr(),
+                  asiolink::IOAddress next_server = asiolink::IOAddress("0.0.0.0"),
+                  const std::string& sname = std::string(),
+                  const std::string& filename = std::string());
 
     /// @brief Adds a new class to the list
     ///
@@ -207,6 +306,11 @@ public:
     bool operator!=(const ClientClassDictionary& other) const {
         return (!equals(other));
     }
+
+    /// @brief Unparse a configuration object
+    ///
+    /// @return a pointer to unparsed configuration
+    virtual isc::data::ElementPtr toElement() const;
 
 private:
 

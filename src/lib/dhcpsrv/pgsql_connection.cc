@@ -1,4 +1,4 @@
-// Copyright (C) 2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2016-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,7 +6,7 @@
 
 #include <config.h>
 
-#include <dhcpsrv/dhcpsrv_log.h>
+#include <dhcpsrv/db_log.h>
 #include <dhcpsrv/pgsql_connection.h>
 
 // PostgreSQL errors should be tested based on the SQL state code.  Each state
@@ -19,7 +19,7 @@
 // #define ERRCODE_UNIQUE_VIOLATION MAKE_SQLSTATE('2','3','5','0','5')
 //
 // PostgreSQL deliberately omits the MAKE_SQLSTATE macro so callers can/must
-// supply their own.  We'll define it as an initlizer_list:
+// supply their own.  We'll define it as an initialization list:
 #define MAKE_SQLSTATE(ch1,ch2,ch3,ch4,ch5) {ch1,ch2,ch3,ch4,ch5}
 // So we can use it like this: const char some_error[] = ERRCODE_xxxx;
 #define PGSQL_STATECODE_LEN 5
@@ -31,18 +31,93 @@ namespace isc {
 namespace dhcp {
 
 // Default connection timeout
+
+/// @todo: migrate this default timeout to src/bin/dhcpX/simple_parserX.cc
 const int PGSQL_DEFAULT_CONNECTION_TIMEOUT = 5; // seconds
 
 const char PgSqlConnection::DUPLICATE_KEY[] = ERRCODE_UNIQUE_VIOLATION;
 
+PgSqlResult::PgSqlResult(PGresult *result)
+    : result_(result), rows_(0), cols_(0) {
+    if (!result) {
+        isc_throw (BadValue, "PgSqlResult result pointer cannot be null");
+    }
+
+    rows_ = PQntuples(result);
+    cols_ = PQnfields(result);
+}
+
+void
+PgSqlResult::rowCheck(int row) const {
+    if (row < 0 || row >= rows_) {
+        isc_throw (DbOperationError, "row: " << row
+                   << ", out of range: 0.." << rows_);
+    }
+}
+
+PgSqlResult::~PgSqlResult() {
+    if (result_)  {
+        PQclear(result_);
+    }
+}
+
+void
+PgSqlResult::colCheck(int col) const {
+    if (col < 0 || col >= cols_) {
+        isc_throw (DbOperationError, "col: " << col
+                   << ", out of range: 0.." << cols_);
+    }
+}
+
+void
+PgSqlResult::rowColCheck(int row, int col) const {
+    rowCheck(row);
+    colCheck(col);
+}
+
+std::string
+PgSqlResult::getColumnLabel(const int col) const {
+    const char* label = NULL;
+    try {
+        colCheck(col);
+        label = PQfname(result_, col);
+    } catch (...) {
+        std::ostringstream os;
+        os << "Unknown column:" << col;
+        return (os.str());
+    }
+
+    return (label);
+}
+
+PgSqlTransaction::PgSqlTransaction(PgSqlConnection& conn)
+    : conn_(conn), committed_(false) {
+    conn_.startTransaction();
+}
+
+PgSqlTransaction::~PgSqlTransaction() {
+    // If commit() wasn't explicitly called, rollback.
+    if (!committed_) {
+        conn_.rollback();
+    }
+}
+
+void
+PgSqlTransaction::commit() {
+    conn_.commit();
+    committed_ = true;
+}
+
 PgSqlConnection::~PgSqlConnection() {
     if (conn_) {
         // Deallocate the prepared queries.
-        PgSqlResult r(PQexec(conn_, "DEALLOCATE all"));
-        if(PQresultStatus(r) != PGRES_COMMAND_OK) {
-            // Highly unlikely but we'll log it and go on.
-            LOG_ERROR(dhcpsrv_logger, DHCPSRV_PGSQL_DEALLOC_ERROR)
-                      .arg(PQerrorMessage(conn_));
+        if (PQstatus(conn_) == CONNECTION_OK) {
+            PgSqlResult r(PQexec(conn_, "DEALLOCATE all"));
+            if(PQresultStatus(r) != PGRES_COMMAND_OK) {
+                // Highly unlikely but we'll log it and go on.
+                DB_LOG_ERROR(PGSQL_DEALLOC_ERROR)
+                    .arg(PQerrorMessage(conn_));
+            }
         }
     }
 }
@@ -59,6 +134,16 @@ PgSqlConnection::prepareStatement(const PgSqlTaggedStatement& statement) {
 }
 
 void
+PgSqlConnection::prepareStatements(const PgSqlTaggedStatement* start_statement,
+                                   const PgSqlTaggedStatement* end_statement) {
+    // Created the PostgreSQL prepared statements.
+    for (const PgSqlTaggedStatement* tagged_statement = start_statement;
+         tagged_statement != end_statement; ++tagged_statement) {
+        prepareStatement(*tagged_statement);
+    }
+}
+
+void
 PgSqlConnection::openDatabase() {
     string dbconnparameters;
     string shost = "localhost";
@@ -69,6 +154,40 @@ PgSqlConnection::openDatabase() {
     }
 
     dbconnparameters += "host = '" + shost + "'" ;
+
+    string sport;
+    try {
+        sport = getParameter("port");
+    } catch (...) {
+        // No port parameter, we are going to use the default port.
+        sport = "";
+    }
+
+    if (sport.size() > 0) {
+        unsigned int port = 0;
+
+        // Port was given, so try to convert it to an integer.
+        try {
+            port = boost::lexical_cast<unsigned int>(sport);
+        } catch (...) {
+            // Port given but could not be converted to an unsigned int.
+            // Just fall back to the default value.
+            port = 0;
+        }
+
+        // The port is only valid when it is in the 0..65535 range.
+        // Again fall back to the default when the given value is invalid.
+        if (port > numeric_limits<uint16_t>::max()) {
+            port = 0;
+        }
+
+        // Add it to connection parameters when not default.
+        if (port > 0) {
+            std::ostringstream oss;
+            oss << port;
+            dbconnparameters += " port = " + oss.str();
+        }
+    }
 
     string suser;
     try {
@@ -117,7 +236,7 @@ PgSqlConnection::openDatabase() {
         }
 
         // The timeout is only valid if greater than zero, as depending on the
-        // database, a zero timeout might signify someting like "wait
+        // database, a zero timeout might signify something like "wait
         // indefinitely".
         //
         // The check below also rejects a value greater than the maximum
@@ -158,7 +277,7 @@ PgSqlConnection::openDatabase() {
 bool
 PgSqlConnection::compareError(const PgSqlResult& r, const char* error_state) {
     const char* sqlstate = PQresultErrorField(r, PG_DIAG_SQLSTATE);
-    // PostgreSQL garuantees it will always be 5 characters long
+    // PostgreSQL guarantees it will always be 5 characters long
     return ((sqlstate != NULL) &&
             (memcmp(sqlstate, error_state, PGSQL_STATECODE_LEN) == 0));
 }
@@ -170,31 +289,53 @@ PgSqlConnection::checkStatementError(const PgSqlResult& r,
     if (s != PGRES_COMMAND_OK && s != PGRES_TUPLES_OK) {
         // We're testing the first two chars of SQLSTATE, as this is the
         // error class. Note, there is a severity field, but it can be
-        // misleadingly returned as fatal.
+        // misleadingly returned as fatal. However, a loss of connectivity
+        // can lead to a NULL sqlstate with a status of PGRES_FATAL_ERROR.
         const char* sqlstate = PQresultErrorField(r, PG_DIAG_SQLSTATE);
-        if ((sqlstate != NULL) &&
+        if  ((sqlstate == NULL) ||
             ((memcmp(sqlstate, "08", 2) == 0) ||  // Connection Exception
              (memcmp(sqlstate, "53", 2) == 0) ||  // Insufficient resources
              (memcmp(sqlstate, "54", 2) == 0) ||  // Program Limit exceeded
              (memcmp(sqlstate, "57", 2) == 0) ||  // Operator intervention
              (memcmp(sqlstate, "58", 2) == 0))) { // System error
-            LOG_ERROR(dhcpsrv_logger, DHCPSRV_PGSQL_FATAL_ERROR)
-                         .arg(statement.name)
-                         .arg(PQerrorMessage(conn_))
-                         .arg(sqlstate);
-            exit (-1);
+            DB_LOG_ERROR(PGSQL_FATAL_ERROR)
+                .arg(statement.name)
+                .arg(PQerrorMessage(conn_))
+                .arg(sqlstate ? sqlstate : "<sqlstate null>");
+            // If there's no lost db callback, then exit
+            if (!invokeDbLostCallback()) {
+                exit (-1);
+            }
+
+            // We still need to throw so caller can error out of the current
+            // processing.
+            isc_throw(DbOperationError,
+                      "fatal database errror or connectivity lost");
         }
 
+        // Apparently it wasn't fatal, so we throw with a helpful message.
         const char* error_message = PQerrorMessage(conn_);
         isc_throw(DbOperationError, "Statement exec failed:" << " for: "
-                  << statement.name << ", reason: "
+                << statement.name << ", status: " << s
+                << "sqlstate:[ " << (sqlstate ? sqlstate : "<null>")
+                <<  "], reason: " << error_message);
+    }
+}
+
+void
+PgSqlConnection::startTransaction() {
+    DB_LOG_DEBUG(DB_DBG_TRACE_DETAIL, PGSQL_START_TRANSACTION);
+    PgSqlResult r(PQexec(conn_, "START TRANSACTION"));
+    if (PQresultStatus(r) != PGRES_COMMAND_OK) {
+        const char* error_message = PQerrorMessage(conn_);
+        isc_throw(DbOperationError, "unable to start transaction"
                   << error_message);
     }
 }
 
 void
 PgSqlConnection::commit() {
-    LOG_DEBUG(dhcpsrv_logger, DHCPSRV_DBG_TRACE_DETAIL, DHCPSRV_PGSQL_COMMIT);
+    DB_LOG_DEBUG(DB_DBG_TRACE_DETAIL, PGSQL_COMMIT);
     PgSqlResult r(PQexec(conn_, "COMMIT"));
     if (PQresultStatus(r) != PGRES_COMMAND_OK) {
         const char* error_message = PQerrorMessage(conn_);
@@ -204,7 +345,7 @@ PgSqlConnection::commit() {
 
 void
 PgSqlConnection::rollback() {
-    LOG_DEBUG(dhcpsrv_logger, DHCPSRV_DBG_TRACE_DETAIL, DHCPSRV_PGSQL_ROLLBACK);
+    DB_LOG_DEBUG(DB_DBG_TRACE_DETAIL, PGSQL_ROLLBACK);
     PgSqlResult r(PQexec(conn_, "ROLLBACK"));
     if (PQresultStatus(r) != PGRES_COMMAND_OK) {
         const char* error_message = PQerrorMessage(conn_);

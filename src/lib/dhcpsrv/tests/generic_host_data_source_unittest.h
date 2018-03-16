@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2015-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -51,104 +51,19 @@ public:
     /// @brief Virtual destructor.
     virtual ~GenericHostDataSourceTest();
 
-    /// @brief Creates a host reservation for specified IPv4 address.
-    ///
-    /// @param address IPv4 address to be set
-    /// @param id Identifier type.
-    ///
-    /// @return generated Host object
-    HostPtr initializeHost4(const std::string& address,
-                            const Host::IdentifierType& id);
-
-    /// @brief Creates a host reservation for specified IPv6 address.
-    ///
-    /// @param address IPv6 address to be reserved
-    /// @param id type of identifier (IDENT_DUID or IDENT_HWADDR are supported)
-    /// @param prefix reservation type (true = prefix, false = address)
-    /// @param new_identifier Boolean value indicating if new host
-    /// identifier should be generated or the same as previously.
-    ///
-    /// @return generated Host object
-    HostPtr initializeHost6(std::string address, Host::IdentifierType id,
-                            bool prefix, bool new_identifier = true);
-
-    /// @brief Generates a hardware address in text version.
-    ///
-    /// @param increase A boolean value indicating if new address (increased)
-    /// must be generated or the same address as previously.
-    /// @return HW address in textual form acceptable by Host constructor
-    std::vector<uint8_t> generateHWAddr(const bool new_identifier = true);
-
-    /// @brief Generates a host identifier in a textual form..
-    ///
-    /// @param increase A boolean value indicating if new identifier (increased)
-    /// must be generated or the same identifier as previously.
-    /// @return Identifier in textual form acceptable by Host constructor
-    std::vector<uint8_t> generateIdentifier(const bool new_identifier = true);
-
-    /// @brief Compares hardware addresses of the two hosts.
-    ///
-    /// This method compares two hwardware address and uses gtest
-    /// macros to signal unexpected (mismatch if expect_match is true;
-    /// match if expect_match is false) values.
-    ///
+    /// @brief Used to sort a host collection by IPv4 subnet id.
     /// @param host1 first host to be compared
     /// @param host2 second host to be compared
-    /// @param expect_match true = HW addresses expected to be the same,
-    ///                     false = HW addresses expected to be different
-    void
-    compareHwaddrs(const ConstHostPtr& host1, const ConstHostPtr& host2,
-                   bool expect_match);
+    static bool compareHostsForSort4(const ConstHostPtr& host1,
+                                     const ConstHostPtr& host2);
 
-    /// @brief Compares DUIDs of the two hosts.
-    ///
-    /// This method compares two DUIDs (client-ids) and uses gtest
-    /// macros to signal unexpected (mismatch if expect_match is true;
-    /// match if expect_match is false) values.
-    ///
+    /// @brief Used to sort a host collection by IPv6 subnet id.
     /// @param host1 first host to be compared
     /// @param host2 second host to be compared
-    /// @param expect_match true = DUIDs expected to be the same,
-    ///                     false = DUIDs expected to be different
-    void
-    compareDuids(const ConstHostPtr& host1, const ConstHostPtr& host2,
-                 bool expect_match);
+    static bool compareHostsForSort6(const ConstHostPtr& host1,
+                                     const ConstHostPtr& host2);
 
-    /// @brief Compares two hosts
-    ///
-    /// This method uses gtest macros to signal errors.
-    ///
-    /// @param host1 first host to compare
-    /// @param host2 second host to compare
-    void compareHosts(const ConstHostPtr& host1, const ConstHostPtr& host2);
-
-    /// @brief Compares two IPv6 reservation lists.
-    ///
-    /// This method uses gtest macros to signal errors.
-    ///
-    /// @param resv1 first IPv6 reservations list
-    /// @param resv2 second IPv6 reservations list
-    void compareReservations6(IPv6ResrvRange resv1, IPv6ResrvRange resv2);
-
-    /// @brief Compares two client classes
-    ///
-    /// This method uses gtest macros to signal errors.
-    ///
-    /// @param classes1 first list of client classes
-    /// @param classes2 second list of client classes
-    void compareClientClasses(const ClientClasses& classes1,
-                              const ClientClasses& classes2);                           
-
-    /// @brief Compares options within two configurations.
-    ///
-    /// This method uses gtest macros to signal errors.
-    ///
-    /// @param cfg1 First configuration.
-    /// @param cfg2 Second configuration.
-    void compareOptions(const ConstCfgOptionPtr& cfg1,
-                        const ConstCfgOptionPtr& cfg2) const;
-
-    /// @brief Creates an opton descriptor holding an empty option.
+    /// @brief Creates an option descriptor holding an empty option.
     ///
     /// @param universe V4 or V6.
     /// @param option_type Option type.
@@ -292,6 +207,39 @@ public:
         return (desc);
     }
 
+    /// @brief Returns number of entries in the v4 options table.
+    ///
+    /// This utility method is expected to be implemented by specific backends.
+    /// The code here is just a boilerplate for backends that do not store
+    /// host options in a table.
+    ///
+    /// @param number of existing entries in options table
+    virtual int countDBOptions4() {
+        return (-1);
+    }
+
+    /// @brief Returns number of entries in the v6 options table.
+    ///
+    /// This utility method is expected to be implemented by specific backends.
+    /// The code here is just a boilerplate for backends that do not store
+    /// host options in a table.
+    ///
+    /// @param number of existing entries in options table
+    virtual int countDBOptions6() {
+        return (-1);
+    }
+
+    /// @brief Returns number of entries in the v6 reservations table.
+    ///
+    /// This utility method is expected to be implemented by specific backends.
+    /// The code here is just a boilerplate for backends that do not store
+    /// v6 reservations in a table.
+    ///
+    /// @param number of existing entries in v6_reservations table
+    virtual int countDBReservations6() {
+        return (-1);
+    }
+
     /// @brief Creates an instance of the vendor option.
     ///
     /// @param universe V4 or V6.
@@ -318,7 +266,7 @@ public:
     /// - DHCPv6 boot file url option,
     /// - DHCPv6 information refresh time option,
     /// - DHCPv6 vendor option with vendor id 2495,
-    /// - DHCPv6 option 1024, with a sigle IPv6 address,
+    /// - DHCPv6 option 1024, with a single IPv6 address,
     /// - DHCPv6 empty option 1, within isc2 option space,
     /// - DHCPv6 option 2, within isc2 option space with 3 IPv6 addresses,
     ///
@@ -331,11 +279,31 @@ public:
     /// value should be used (if true), or binary value (if false).
     /// @param added_options Controls which options should be inserted into
     /// a host: DHCPv4, DHCPv6 options or both.
+    /// @param user_context Optional user context
     void addTestOptions(const HostPtr& host, const bool formatted,
-                        const AddedOptions& added_options) const;
+                        const AddedOptions& added_options,
+                        isc::data::ConstElementPtr user_context =
+                        isc::data::ConstElementPtr()) const;
 
     /// @brief Pointer to the host data source
     HostDataSourcePtr hdsptr_;
+
+    /// @brief Test that backend can be started in read-only mode.
+    ///
+    /// Some backends can operate when the database is read only, e.g.
+    /// host reservation tables are read only, or the database user has
+    /// read only privileges on the entire database. In such cases, the
+    /// Kea server administrator can specify in the backend configuration
+    /// that the database should be opened in read only mode, i.e.
+    /// INSERT, UPDATE, DELETE statements can't be issued. If any of the
+    /// functions updating the database is called for the backend, the
+    /// error is reported. The database running in read only mode can
+    /// be merely used to retrieve existing host reservations from the
+    /// database. This test verifies that this is the case.
+    ///
+    /// @param valid_db_type Parameter specifying type of backend to
+    /// be used, e.g. type=mysql.
+    void testReadOnlyDatabase(const char* valid_db_type);
 
     /// @brief Test that checks that simple host with IPv4 reservation
     ///        can be inserted and later retrieved.
@@ -343,6 +311,19 @@ public:
     /// Uses gtest macros to report failures.
     /// @param id Identifier type.
     void testBasic4(const Host::IdentifierType& id);
+
+
+    /// @brief Test that Verifies that an IPv4 host reservation with
+    /// options can have a max value for dhcp4_subnet id
+    ///
+    /// Uses gtest macros to report failures.
+    void testMaxSubnetId4();
+
+    /// @brief Test that Verifies that an IPv6 host reservation with
+    /// options can have a max value for dhcp6_subnet id
+    ///
+    /// Uses gtest macros to report failures.
+    void testMaxSubnetId6();
 
     /// @brief Test inserts several hosts with unique IPv4 address and
     ///        checks that they can be retrieved properly.
@@ -384,6 +365,13 @@ public:
     /// @param num number of hostnames to be added.
     void testHostname(std::string name, int num);
 
+    /// @brief Test insert and retrieve a host with user context.
+    ///
+    /// Uses gtest macros to report failures.
+    ///
+    /// @param user_context The user context.
+    void testUserContext(isc::data::ConstElementPtr user_context);
+
     /// @brief Test inserts multiple reservations for the same host for different
     /// subnets and check that they can be retrieved properly.
     ///
@@ -400,6 +388,10 @@ public:
     /// @param id type of the identifier to be used (IDENT_HWADDR or IDENT_DUID)
     /// @param prefix true - reserve IPv6 prefix, false - reserve IPv6 address
     void testGetByIPv6(Host::IdentifierType id, bool prefix);
+
+    /// @brief Test inserts several hosts with unique prefixes and checks
+    ///        that the can be retrieved by subnet id and prefix value.
+    void testGetBySubnetIPv6();
 
     /// @brief Test that hosts can be retrieved by hardware address.
     ///
@@ -455,7 +447,10 @@ public:
     ///
     /// @param formatted Boolean value indicating if the option values
     /// should be stored in the textual format in the database.
-    void testOptionsReservations4(const bool formatted);
+    /// @param user_context Optional user context.
+    void testOptionsReservations4(const bool formatted,
+                                  isc::data::ConstElementPtr user_context =
+                                  isc::data::ConstElementPtr());
 
     /// @brief Test that DHCPv6 options can be inserted and retrieved from
     /// the database.
@@ -464,7 +459,10 @@ public:
     ///
     /// @param formatted Boolean value indicating if the option values
     /// should be stored in the textual format in the database.
-    void testOptionsReservations6(const bool formatted);
+    /// @param user_context Optional user context.
+    void testOptionsReservations6(const bool formatted,
+                                  isc::data::ConstElementPtr user_context =
+                                  isc::data::ConstElementPtr());
 
     /// @brief Test that DHCPv4 and DHCPv6 options can be inserted and retrieved
     /// with a single query to the database.
@@ -474,6 +472,75 @@ public:
     /// @param formatted Boolean value indicating if the option values
     /// should be stored in the textual format in the database.
     void testOptionsReservations46(const bool formatted);
+
+    /// @brief Test that multiple client classes for IPv4 can be inserted and
+    /// retrieved for a given host reservation.
+    ///
+    /// Uses gtest macros to report failures.
+    ///
+    void testMultipleClientClasses4();
+
+    /// @brief Test that multiple client classes for IPv6 can be inserted and
+    /// retrieved for a given host reservation.
+    ///
+    /// Uses gtest macros to report failures.
+    ///
+    void testMultipleClientClasses6();
+
+    /// @brief Test that multiple client classes for both IPv4 and IPv6 can
+    /// be inserted and retrieved for a given host reservation.
+    ///
+    /// Uses gtest macros to report failures.
+    ///
+    void testMultipleClientClassesBoth();
+
+    /// @brief Test that siaddr, sname, file fields can be retrieved
+    /// from a database for a host.
+    ///
+    /// Uses gtest macros to report failures.
+    void testMessageFields4();
+
+    /// @brief Stress test on adding and retrieving hosts
+    ///
+    /// Rather than checking for correctness, this test gives interpretable
+    /// performance results.
+    ///
+    /// @param n_of_hosts number of hosts to insert into and retrieve from the
+    ///     database
+    void stressTest(uint32_t n_of_hosts);
+    /// @brief Tests that delete(subnet-id, addr4) call works.
+    ///
+    /// Uses gtest macros to report failures.
+    void testDeleteByAddr4();
+
+    /// @brief Tests that delete(subnet4-id, identifier-type, identifier) works.
+    ///
+    /// Uses gtest macros to report failures.
+    void testDeleteById4();
+
+    /// @brief Tests that delete(subnet4-id, id-type, id) also deletes options.
+    void testDeleteById4Options();
+
+    /// @brief Tests that delete(subnet6-id, identifier-type, identifier) works.
+    ///
+    /// Uses gtest macros to report failures.
+    void testDeleteById6();
+
+    /// @brief Tests that delete(subnet6-id, id-type, id) also deletes options.
+    ///
+    /// Uses gtest macros to report failures.
+    void testDeleteById6Options();
+
+    /// @brief Tests that multiple reservations without IPv4 addresses can be
+    /// specified within a subnet.
+    ///
+    /// Uses gtest macros to report failures.
+    void testMultipleHostsNoAddress4();
+
+    /// @brief Tests that multiple hosts can be specified within an IPv6 subnet.
+    ///
+    /// Uses gtest macros to report failures.
+    void testMultipleHosts6();
 
     /// @brief Returns DUID with identical content as specified HW address
     ///
@@ -497,8 +564,8 @@ public:
 
 };
 
-}; // namespace test
-}; // namespace dhcp
-}; // namespace isc
+}  // namespace test
+}  // namespace dhcp
+}  // namespace isc
 
 #endif

@@ -1,4 +1,4 @@
-// Copyright (C) 2011-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2011-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -119,7 +119,7 @@ TEST(IfaceTest, countActive4) {
 /// TestPktFilter::receive will never be called. The appropriate extension
 /// to IfaceMgr is planned along with implementation of other "Packet
 /// Filters" such as these supporting Linux Packet Filtering and
-/// Berkley Packet Filtering.
+/// Berkeley Packet Filtering.
 class TestPktFilter : public PktFilter {
 public:
 
@@ -210,7 +210,7 @@ public:
     /// @brief Returns the collection of existing interfaces.
     IfaceCollection& getIfacesLst() { return (ifaces_); }
 
-    /// @brief This function creates fictitious interfaces with fictious
+    /// @brief This function creates fictitious interfaces with fictitious
     /// addresses.
     ///
     /// These interfaces can be used in tests that don't actually try
@@ -281,7 +281,7 @@ public:
     }
 
     /// @brief Checks if the specified interface has a socket bound to a
-    /// specified adddress.
+    /// specified address.
     ///
     /// @param iface_name A name of the interface.
     /// @param addr An address to be checked for binding.
@@ -390,7 +390,7 @@ public:
 #endif
     }
 
-    // Get ther number of IPv4 or IPv6 sockets on the loopback interface
+    // Get the number of IPv4 or IPv6 sockets on the loopback interface
     int getOpenSocketsCount(const Iface& iface, uint16_t family) const {
         // Get all sockets.
         Iface::SocketCollection sockets = iface.getSockets();
@@ -641,10 +641,10 @@ TEST_F(IfaceMgrTest, getIface) {
     // Interface name, ifindex
     IfacePtr iface1(new Iface("lo1", 100));
     IfacePtr iface2(new Iface("eth9", 101));
-    IfacePtr iface3(new Iface("en3", 102));
+    IfacePtr iface3(new Iface("en7", 102));
     IfacePtr iface4(new Iface("e1000g4", 103));
     cout << "This test assumes that there are less than 100 network interfaces"
-         << " in the tested system and there are no lo1, eth9, en3, e1000g4"
+         << " in the tested system and there are no lo1, eth9, en7, e1000g4"
          << " or wifi15 interfaces present." << endl;
 
     // Note: real interfaces may be detected as well
@@ -666,7 +666,7 @@ TEST_F(IfaceMgrTest, getIface) {
     IfacePtr tmp = ifacemgr->getIface(102);
     ASSERT_TRUE(tmp);
 
-    EXPECT_EQ("en3", tmp->getName());
+    EXPECT_EQ("en7", tmp->getName());
     EXPECT_EQ(102, tmp->getIndex());
 
     // Check that interface can be retrieved by name
@@ -729,7 +729,7 @@ TEST_F(IfaceMgrTest, receiveTimeout6) {
     time_duration duration = stop_time - start_time;
     // We stop the clock when the call completes so it does not
     // precisely reflect the receive timeout. However the
-    // uncertainity should be low enough to expect that measured
+    // uncertainty should be low enough to expect that measured
     // value is in the range <1.4s; 1.7s>.
     EXPECT_GE(duration.total_microseconds(),
               1400000 - TIMEOUT_TOLERANCE);
@@ -781,7 +781,7 @@ TEST_F(IfaceMgrTest, receiveTimeout4) {
     time_duration duration = stop_time - start_time;
     // We stop the clock when the call completes so it does not
     // precisely reflect the receive timeout. However the
-    // uncertainity should be low enough to expect that measured
+    // uncertainty should be low enough to expect that measured
     // value is in the range <2.3s; 2.6s>.
     EXPECT_GE(duration.total_microseconds(),
               2300000 - TIMEOUT_TOLERANCE);
@@ -833,7 +833,7 @@ TEST_F(IfaceMgrTest, multipleSockets) {
         cout << "Local loopback interface not found. Skipping test. " << endl;
         return;
     }
-    // Once sockets have been sucessfully opened, they are supposed to
+    // Once sockets have been successfully opened, they are supposed to
     // be on the list. Here we start to test if all expected sockets
     // are on the list and no other (unexpected) socket is there.
     Iface::SocketCollection sockets = iface_ptr->getSockets();
@@ -874,7 +874,7 @@ TEST_F(IfaceMgrTest, multipleSockets) {
     sockets = iface_ptr->getSockets();
     ASSERT_EQ(0, sockets.size());
 
-    // We are still in posession of socket descriptors that we created
+    // We are still in possession of socket descriptors that we created
     // on the beginning of this test. We can use them to check whether
     // closeSockets() only removed them from the list or they have been
     // really closed.
@@ -1209,7 +1209,7 @@ TEST_F(IfaceMgrTest, sendReceive4) {
     // skip checking source port of sent address.
 
     // Close the socket. Further we will test if errors are reported
-    // properly on attempt to use closed soscket.
+    // properly on attempt to use closed socket.
     close(socket1);
 
 // Warning: kernel bug on FreeBSD. The following code checks that attempt to
@@ -1226,7 +1226,7 @@ TEST_F(IfaceMgrTest, sendReceive4) {
 //
 // @todo: This part of the test is currently disabled on all BSD systems as it was
 // the quick fix. We need a more elegant (config-based) solution to disable
-// this check on affected systems only. The ticket has been submited for this
+// this check on affected systems only. The ticket has been submitted for this
 // work: http://kea.isc.org/ticket/2971
 #ifndef OS_BSD
     EXPECT_THROW(ifacemgr->receive4(10), SocketReadError);
@@ -1399,11 +1399,11 @@ TEST_F(IfaceMgrTest, checkPacketFilterRawSocket) {
 
 // Note: This test will only run on non-Linux and non-BSD systems.
 // This test checks whether it is possible to use IfaceMgr to figure
-// out which Pakcket Filter object should be used when direct responses
+// out which Packet Filter object should be used when direct responses
 // to hosts, having no address assigned are desired or not desired.
 // Since direct responses aren't supported on systems other than Linux
 // and BSD the function under test should always set object of
-// PktFilterInet type as current Packet Filter. This object does not 
+// PktFilterInet type as current Packet Filter. This object does not
 //support direct responses. Once implementation is added on systems
 // other than BSD and Linux the OS specific version of the test will
 // be removed.
@@ -1471,13 +1471,42 @@ TEST_F(IfaceMgrTest, openSockets4) {
     ASSERT_NO_THROW(ifacemgr.setPacketFilter(custom_packet_filter));
 
     // Simulate opening sockets using the dummy packet filter.
-    ASSERT_NO_THROW(ifacemgr.openSockets4(DHCP4_SERVER_PORT, true, NULL));
+    ASSERT_NO_THROW(ifacemgr.openSockets4(DHCP4_SERVER_PORT, true, 0));
 
     // Expect that the sockets are open on both eth0 and eth1.
     EXPECT_EQ(1, ifacemgr.getIface("eth0")->getSockets().size());
     EXPECT_EQ(1, ifacemgr.getIface("eth1")->getSockets().size());
     // Socket shouldn't have been opened on loopback.
     EXPECT_TRUE(ifacemgr.getIface("lo")->getSockets().empty());
+}
+
+// This test verifies that IPv4 sockets are open on the loopback interface
+// when the loopback is active and allowed.
+TEST_F(IfaceMgrTest, openSockets4Loopback) {
+    NakedIfaceMgr ifacemgr;
+
+    // Remove all real interfaces and create a set of dummy interfaces.
+    ifacemgr.createIfaces();
+
+    // Allow the loopback interface.
+    ifacemgr.setAllowLoopBack(true);
+
+    // Make the loopback interface active.
+    ifacemgr.getIface("lo")->inactive4_ = false;
+
+    // Use the custom packet filter object. This object mimics the socket
+    // opening operation - the real socket is not open.
+    boost::shared_ptr<TestPktFilter> custom_packet_filter(new TestPktFilter());
+    ASSERT_TRUE(custom_packet_filter);
+    ASSERT_NO_THROW(ifacemgr.setPacketFilter(custom_packet_filter));
+
+    // Simulate opening sockets using the dummy packet filter.
+    ASSERT_NO_THROW(ifacemgr.openSockets4(DHCP4_SERVER_PORT, true, 0));
+
+    // Expect that the sockets are open on all interfaces.
+    EXPECT_EQ(1, ifacemgr.getIface("eth0")->getSockets().size());
+    EXPECT_EQ(1, ifacemgr.getIface("eth1")->getSockets().size());
+    EXPECT_EQ(1, ifacemgr.getIface("lo")->getSockets().size());
 }
 
 // This test verifies that the socket is not open on the interface which is
@@ -1538,7 +1567,7 @@ TEST_F(IfaceMgrTest, openSockets4IfaceInactive) {
     // - is inactive
     ifacemgr.setIfaceFlags("eth1", false, true, true, true, false);
     ASSERT_TRUE(ifacemgr.getIface("eth1")->inactive4_);
-    ASSERT_NO_THROW(ifacemgr.openSockets4(DHCP4_SERVER_PORT, true, NULL));
+    ASSERT_NO_THROW(ifacemgr.openSockets4(DHCP4_SERVER_PORT, true, 0));
 
     // The socket on eth0 should be open because interface is up, running and
     // active (not disabled through DHCP configuration, for example).
@@ -1569,7 +1598,7 @@ TEST_F(IfaceMgrTest, openSockets4NoErrorHandler) {
 
     // The function throws an exception when it tries to open a socket
     // and bind it to the address in use.
-    EXPECT_THROW(ifacemgr.openSockets4(DHCP4_SERVER_PORT, true, NULL),
+    EXPECT_THROW(ifacemgr.openSockets4(DHCP4_SERVER_PORT, true, 0),
                  isc::dhcp::SocketConfigError);
 
 }
@@ -1599,7 +1628,7 @@ TEST_F(IfaceMgrTest, openSocket4ErrorHandler) {
     // open and bound to the same address and port. An attempt to open
     // another socket and bind to this address and port should fail.
     ASSERT_NO_THROW(ifacemgr.openSockets4(DHCP4_SERVER_PORT, true, error_handler));
-    // We expect that an error occured when we tried to open a socket on
+    // We expect that an error occurred when we tried to open a socket on
     // eth0, but the socket on eth1 should open just fine.
     EXPECT_EQ(1, errors_count_);
 
@@ -1629,7 +1658,7 @@ TEST_F(IfaceMgrTest, hasOpenSocketForAddress4) {
     ASSERT_NO_THROW(ifacemgr.setPacketFilter(custom_packet_filter));
 
     // Simulate opening sockets using the dummy packet filter.
-    ASSERT_NO_THROW(ifacemgr.openSockets4(DHCP4_SERVER_PORT, true, NULL));
+    ASSERT_NO_THROW(ifacemgr.openSockets4(DHCP4_SERVER_PORT, true, 0));
 
     // Expect that the sockets are open on both eth0 and eth1.
     ASSERT_EQ(1, ifacemgr.getIface("eth0")->getSockets().size());
@@ -1688,6 +1717,40 @@ TEST_F(IfaceMgrTest, openSockets6LinkLocal) {
 #endif
 }
 
+// This test checks that the sockets are open on the loopback interface
+// when the loopback is active and allowed.
+TEST_F(IfaceMgrTest, openSockets6Loopback) {
+    NakedIfaceMgr ifacemgr;
+
+    // Remove all real interfaces and create a set of dummy interfaces.
+    ifacemgr.createIfaces();
+
+    // Allow the loopback interface.
+    ifacemgr.setAllowLoopBack(true);
+
+    // Make the loopback interface active.
+    ifacemgr.getIface("lo")->inactive6_ = false;
+
+    // The loopback interface has no link-local (as for Linux but not BSD)
+    // so add one.
+    ifacemgr.getIface("lo")->addUnicast(IOAddress("::1"));
+
+    boost::shared_ptr<PktFilter6Stub> filter(new PktFilter6Stub());
+    ASSERT_TRUE(filter);
+    ASSERT_NO_THROW(ifacemgr.setPacketFilter(filter));
+
+    // Simulate opening sockets using the dummy packet filter.
+    bool success = false;
+    ASSERT_NO_THROW(success = ifacemgr.openSockets6(DHCP6_SERVER_PORT));
+    EXPECT_TRUE(success);
+
+    // Check that the loopback interface has at least an open socket.
+    EXPECT_EQ(1, ifacemgr.getIface("lo")->getSockets().size());
+
+    // This socket should be bound to ::1
+    EXPECT_TRUE(ifacemgr.isBound("lo", "::1"));
+}
+
 // This test checks that socket is not open on the interface which doesn't
 // have a link-local address.
 TEST_F(IfaceMgrTest, openSockets6NoLinkLocal) {
@@ -1712,7 +1775,7 @@ TEST_F(IfaceMgrTest, openSockets6NoLinkLocal) {
 
     // Check that the number of sockets is correct on each interface.
     checkSocketsCount6(*ifacemgr.getIface("lo"), 0);
-    // The thrid parameter specifies that the number of link-local
+    // The third parameter specifies that the number of link-local
     // addresses for eth0 is equal to 0.
     checkSocketsCount6(*ifacemgr.getIface("eth0"), 0, 0);
     checkSocketsCount6(*ifacemgr.getIface("eth1"), 0, 1);
@@ -1731,7 +1794,7 @@ TEST_F(IfaceMgrTest, openSockets6NoLinkLocal) {
 
 }
 
-// This test checks that socket is open on the non-muticast-capable
+// This test checks that socket is open on the non-multicast-capable
 // interface. This socket simply doesn't join multicast group.
 TEST_F(IfaceMgrTest, openSockets6NotMulticast) {
     NakedIfaceMgr ifacemgr;
@@ -2014,7 +2077,7 @@ TEST_F(IfaceMgrTest, openSocket6ErrorHandler) {
     // opened on eth0 and an attempt to open another socket and bind to
     // the same address and port should fail.
     ASSERT_NO_THROW(ifacemgr.openSockets6(DHCP6_SERVER_PORT, error_handler));
-    // We expect that an error occured when we tried to open a socket on
+    // We expect that an error occurred when we tried to open a socket on
     // eth0, but the socket on eth1 should open just fine.
     EXPECT_EQ(1, errors_count_);
 
@@ -2124,7 +2187,7 @@ TEST_F(IfaceMgrTest, iface_methods) {
         OutOfRange
     );
 
-    // MAC length should stay not set as excep
+    // MAC length should stay not set as exception was thrown.
     EXPECT_EQ(0, iface.getMacLen());
 
     // Setting maximum length MAC should be ok.
@@ -2387,7 +2450,7 @@ TEST_F(IfaceMgrTest, detectIfaces) {
     NakedIfaceMgr ifacemgr;
 
     // We are using struct ifaddrs as it is the only good portable one
-    // ifreq and ioctls are far from portabe. For BSD ifreq::ifa_flags field
+    // ifreq and ioctls are far from portable. For BSD ifreq::ifa_flags field
     // is only a short which, nowadays, can be negative
     struct ifaddrs *iflist = 0, *ifptr = 0;
     ASSERT_EQ(0, getifaddrs(&iflist))
@@ -2493,7 +2556,7 @@ TEST_F(IfaceMgrTest, SingleExternalSocket4) {
 
 // Tests if multiple external sockets and their callbacks can be passed and
 // it is supported properly by receive4() method.
-TEST_F(IfaceMgrTest, MiltipleExternalSockets4) {
+TEST_F(IfaceMgrTest, MultipleExternalSockets4) {
 
     callback_ok = false;
     callback2_ok = false;
@@ -2662,7 +2725,7 @@ TEST_F(IfaceMgrTest, SingleExternalSocket6) {
 
 // Tests if multiple external sockets and their callbacks can be passed and
 // it is supported properly by receive6() method.
-TEST_F(IfaceMgrTest, MiltipleExternalSockets6) {
+TEST_F(IfaceMgrTest, MultipleExternalSockets6) {
 
     callback_ok = false;
     callback2_ok = false;
@@ -2792,7 +2855,7 @@ TEST_F(IfaceMgrTest, DeleteExternalSockets6) {
 
 // Test checks if the unicast sockets can be opened.
 // This test is now disabled, because there is no reliable way to test it. We
-// can't even use loopback, beacuse openSockets() skips loopback interface
+// can't even use loopback, because openSockets() skips loopback interface
 // (as it should be, because DHCP server is not supposed to listen on loopback).
 TEST_F(IfaceMgrTest, DISABLED_openUnicastSockets) {
     /// @todo Need to implement a test that is able to check whether we can open
@@ -2833,15 +2896,17 @@ TEST_F(IfaceMgrTest, unicastDuplicates) {
     NakedIfaceMgr ifacemgr;
 
     IfacePtr iface = ifacemgr.getIface(LOOPBACK);
-    if (iface) {
+    if (!iface) {
         cout << "Local loopback interface not found. Skipping test. " << endl;
         return;
     }
 
     // Tell the interface that it should bind to this global interface
+    // It is the first attempt so it should succeed
     EXPECT_NO_THROW(iface->addUnicast(IOAddress("2001:db8::1")));
 
     // Tell the interface that it should bind to this global interface
+    // It is the second attempt so it should fail
     EXPECT_THROW(iface->addUnicast(IOAddress("2001:db8::1")), BadValue);
 }
 

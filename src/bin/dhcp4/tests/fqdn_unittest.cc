@@ -1,4 +1,4 @@
-// Copyright (C) 2013-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2013-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -107,6 +107,60 @@ const char* CONFIGS[] = {
         "\"dhcp-ddns\": {"
             "\"enable-updates\": true,"
             "\"qualifying-suffix\": \"fake-suffix.isc.org.\""
+        "}"
+    "}",
+    // Configuration which disables DNS updates but contains a reservation
+    // for a hostname. Reserved hostname should be assigned to a client if
+    // the client includes it in the Parameter Request List option.
+    "{ \"interfaces-config\": {"
+        "      \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"valid-lifetime\": 3000,"
+        "\"subnet4\": [ { "
+        "    \"subnet\": \"10.0.0.0/24\", "
+        "    \"id\": 1,"
+        "    \"pools\": [ { \"pool\": \"10.0.0.10-10.0.0.100\" } ],"
+        "    \"option-data\": [ {"
+        "        \"name\": \"routers\","
+        "        \"data\": \"10.0.0.200,10.0.0.201\""
+        "    } ],"
+        "    \"reservations\": ["
+        "       {"
+        "         \"hw-address\": \"aa:bb:cc:dd:ee:ff\","
+        "         \"hostname\":   \"reserved.example.org\""
+        "       }"
+        "    ]"
+        " }],"
+        "\"dhcp-ddns\": {"
+            "\"enable-updates\": false,"
+            "\"qualifying-suffix\": \"\""
+        "}"
+    "}",
+    // Configuration which disables DNS updates but contains a reservation
+    // for a hostname and the qualifying-suffix which should be appended to
+    // the reserved hostname in the Hostname option returned to a client.
+    "{ \"interfaces-config\": {"
+        "      \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"valid-lifetime\": 3000,"
+        "\"subnet4\": [ { "
+        "    \"subnet\": \"10.0.0.0/24\", "
+        "    \"id\": 1,"
+        "    \"pools\": [ { \"pool\": \"10.0.0.10-10.0.0.100\" } ],"
+        "    \"option-data\": [ {"
+        "        \"name\": \"routers\","
+        "        \"data\": \"10.0.0.200,10.0.0.201\""
+        "    } ],"
+        "    \"reservations\": ["
+        "       {"
+        "         \"hw-address\": \"aa:bb:cc:dd:ee:ff\","
+        "         \"hostname\":   \"foo-bar\""
+        "       }"
+        "    ]"
+        " }],"
+        "\"dhcp-ddns\": {"
+            "\"enable-updates\": false,"
+            "\"qualifying-suffix\": \"example.isc.org\""
         "}"
     "}"
 };
@@ -373,10 +427,7 @@ public:
     // in a client request correctly, according to the replace-client-name
     // mode configuration parameter.
     //
-    // @param mode - value to use client-name-replacment parameter - for
-    // mode labels such as NEVER and ALWAYS must incluce enclosing quotes:
-    // "\"NEVER\"".  This allows us to also pass in boolean literals which
-    // are unquoted.
+    // @param mode - value to use for replace-client-name
     // @param client_name_flag - specifies whether or not the client request
     // should contain a hostname option
     // @param exp_replacement_flag - specifies whether or not the server is
@@ -398,7 +449,7 @@ public:
             "\"dhcp-ddns\": {"
             "\"enable-updates\": true,"
             "\"qualifying-suffix\": \"fake-suffix.isc.org.\","
-            "\"replace-client-name\": %s"
+            "\"replace-client-name\": \"%s\""
             "}}";
 
         // Create the configuration and configure the server
@@ -514,7 +565,7 @@ public:
     /// @param len - expected lease length in the NCR
     /// @param not_strict_expire_check - when true the comparison of the NCR
     /// lease expiration time is conducted as greater than or equal to rather
-    /// equal to CLTT plus lease lenght.
+    /// equal to CLTT plus lease length.
     void verifyNameChangeRequest(const isc::dhcp_ddns::NameChangeType type,
                                  const bool reverse, const bool forward,
                                  const std::string& addr,
@@ -849,6 +900,17 @@ TEST_F(NameDhcpv4SrvTest, processRequestFqdnEmptyDomainName) {
                             "", // empty DHCID forces that it is not checked
                             time(NULL) + subnet_->getValid(),
                             subnet_->getValid(), true);
+
+    req = generatePktWithFqdn(DHCPREQUEST, Option4ClientFqdn::FLAG_S |
+                              Option4ClientFqdn::FLAG_E,
+                              "", Option4ClientFqdn::PARTIAL, true);
+
+    ASSERT_NO_THROW(reply = srv_->processRequest(req));
+
+    checkResponse(reply, DHCPACK, 1234);
+
+    // Verify that there are no NameChangeRequests generated.
+    ASSERT_EQ(0, d2_mgr_.getQueueSize());
 }
 
 // Test that server generates client's hostname from the IP address assigned
@@ -1018,6 +1080,88 @@ TEST_F(NameDhcpv4SrvTest, processTwoRequestsHostname) {
                             "000101A5AEEA7498BD5AD9D3BF600E49FF39A7E3"
                             "AFDCE8C3D0E53F35CC584DD63C89CA",
                             time(NULL), subnet_->getValid(), true);
+}
+
+// Test that client may send two requests, each carrying the same FQDN option.
+// Server should renew  existing lease for the second request without generating
+// any NCRs.
+TEST_F(NameDhcpv4SrvTest, processRequestRenewFqdn) {
+    IfaceMgrTestConfig test_config(true);
+    IfaceMgr::instance().openSockets4();
+
+    Pkt4Ptr req1 = generatePktWithFqdn(DHCPREQUEST, Option4ClientFqdn::FLAG_S |
+                                       Option4ClientFqdn::FLAG_E,
+                                       "myhost.example.com.",
+                                       Option4ClientFqdn::FULL, true);
+
+    Pkt4Ptr reply;
+    ASSERT_NO_THROW(reply = srv_->processRequest(req1));
+
+    checkResponse(reply, DHCPACK, 1234);
+
+    // Verify that there is one NameChangeRequest generated.
+    ASSERT_EQ(1, d2_mgr_.getQueueSize());
+    verifyNameChangeRequest(isc::dhcp_ddns::CHG_ADD, true, true,
+                            reply->getYiaddr().toText(), "myhost.example.com.",
+                            "00010132E91AA355CFBB753C0F0497A5A940436"
+                            "965B68B6D438D98E680BF10B09F3BCF",
+                            time(NULL), subnet_->getValid(), true);
+
+    // Create another Request message with the same FQDN. Server
+    // should generate no NameChangeRequests.
+    Pkt4Ptr req2 = generatePktWithFqdn(DHCPREQUEST, Option4ClientFqdn::FLAG_S |
+                                       Option4ClientFqdn::FLAG_E,
+                                       "myhost.example.com.",
+                                       Option4ClientFqdn::FULL, true);
+
+    ASSERT_NO_THROW(reply = srv_->processRequest(req2));
+
+    checkResponse(reply, DHCPACK, 1234);
+
+    // There should be no NameChangeRequests.
+    ASSERT_EQ(0, d2_mgr_.getQueueSize());
+}
+
+// Test that client may send two requests, each carrying the same hostname
+// option.  Server should renew  existing lease for the second request without
+// generating any NCRs.
+TEST_F(NameDhcpv4SrvTest, processRequestRenewHostname) {
+    IfaceMgrTestConfig test_config(true);
+    IfaceMgr::instance().openSockets4();
+
+    Pkt4Ptr req1 = generatePktWithHostname(DHCPREQUEST, "myhost.example.com.");
+
+    // Set interface for the incoming packet. The server requires it to
+    // generate client id.
+    req1->setIface("eth1");
+
+    Pkt4Ptr reply;
+    ASSERT_NO_THROW(reply = srv_->processRequest(req1));
+
+    checkResponse(reply, DHCPACK, 1234);
+
+    // Verify that there is one NameChangeRequest generated.
+    ASSERT_EQ(1, d2_mgr_.getQueueSize());
+    verifyNameChangeRequest(isc::dhcp_ddns::CHG_ADD, true, true,
+                            reply->getYiaddr().toText(), "myhost.example.com.",
+                            "00010132E91AA355CFBB753C0F0497A5A940436"
+                            "965B68B6D438D98E680BF10B09F3BCF",
+                            time(NULL), subnet_->getValid(), true);
+
+    // Create another Request message with the same Hostname. Server
+    // should generate no NameChangeRequests.
+    Pkt4Ptr req2 = generatePktWithHostname(DHCPREQUEST, "myhost.example.com.");
+
+    // Set interface for the incoming packet. The server requires it to
+    // generate client id.
+    req2->setIface("eth1");
+
+    ASSERT_NO_THROW(reply = srv_->processRequest(req2));
+
+    checkResponse(reply, DHCPACK, 1234);
+
+    // There should be no NameChangeRequests.
+    ASSERT_EQ(0, d2_mgr_.getQueueSize());
 }
 
 // Test that when a release message is sent for a previously acquired lease,
@@ -1324,10 +1468,91 @@ TEST_F(NameDhcpv4SrvTest, hostnameReservation) {
     }
 }
 
+// This test verifies that the server sends the Hostname option to the client
+// with hostname reservation and which included hostname option code in the
+// Parameter Request List.
+TEST_F(NameDhcpv4SrvTest, hostnameReservationPRL) {
+    Dhcp4Client client(Dhcp4Client::SELECTING);
+    // Use HW address that matches the reservation entry in the configuration.
+    client.setHWAddress("aa:bb:cc:dd:ee:ff");
+    // Configure DHCP server.
+    configure(CONFIGS[4], *client.getServer());
+    // Make sure that DDNS is enabled.
+    ASSERT_FALSE(CfgMgr::instance().ddnsEnabled());
+    // Request Hostname option.
+    ASSERT_NO_THROW(client.requestOption(DHO_HOST_NAME));
+
+    // Send the DHCPDISCOVER
+    ASSERT_NO_THROW(client.doDiscover());
+
+    // Make sure that the server responded.
+    Pkt4Ptr resp = client.getContext().response_;
+    ASSERT_TRUE(resp);
+    ASSERT_EQ(DHCPOFFER, static_cast<int>(resp->getType()));
+
+    // Obtain the Hostname option sent in the response and make sure that the server
+    // has used the hostname reserved for this client.
+    OptionStringPtr hostname;
+    hostname = boost::dynamic_pointer_cast<OptionString>(resp->getOption(DHO_HOST_NAME));
+    ASSERT_TRUE(hostname);
+    EXPECT_EQ("reserved.example.org", hostname->getValue());
+
+    // Now send the DHCPREQUEST with including the Hostname option.
+    ASSERT_NO_THROW(client.doRequest());
+    resp = client.getContext().response_;
+    ASSERT_TRUE(resp);
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+
+    // Once again check that the Hostname is as expected.
+    hostname = boost::dynamic_pointer_cast<OptionString>(resp->getOption(DHO_HOST_NAME));
+    ASSERT_TRUE(hostname);
+    EXPECT_EQ("reserved.example.org", hostname->getValue());
+}
+
+// This test verifies that the server sends the Hostname option to the client
+// with partial hostname reservation and with the global qualifying-suffix set.
+TEST_F(NameDhcpv4SrvTest, hostnameReservationNoDNSQualifyingSuffix) {
+    Dhcp4Client client(Dhcp4Client::SELECTING);
+    // Use HW address that matches the reservation entry in the configuration.
+    client.setHWAddress("aa:bb:cc:dd:ee:ff");
+    // Configure DHCP server.
+    configure(CONFIGS[5], *client.getServer());
+    // Make sure that DDNS is enabled.
+    ASSERT_FALSE(CfgMgr::instance().ddnsEnabled());
+    // Include the Hostname option.
+    ASSERT_NO_THROW(client.includeHostname("client-name"));
+
+    // Send the DHCPDISCOVER
+    ASSERT_NO_THROW(client.doDiscover());
+
+    // Make sure that the server responded.
+    Pkt4Ptr resp = client.getContext().response_;
+    ASSERT_TRUE(resp);
+    ASSERT_EQ(DHCPOFFER, static_cast<int>(resp->getType()));
+
+    // Obtain the Hostname option sent in the response and make sure that the server
+    // has used the hostname reserved for this client.
+    OptionStringPtr hostname;
+    hostname = boost::dynamic_pointer_cast<OptionString>(resp->getOption(DHO_HOST_NAME));
+    ASSERT_TRUE(hostname);
+    EXPECT_EQ("foo-bar.example.isc.org", hostname->getValue());
+
+    // Now send the DHCPREQUEST with including the Hostname option.
+    ASSERT_NO_THROW(client.doRequest());
+    resp = client.getContext().response_;
+    ASSERT_TRUE(resp);
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+
+    // Once again check that the Hostname is as expected.
+    hostname = boost::dynamic_pointer_cast<OptionString>(resp->getOption(DHO_HOST_NAME));
+    ASSERT_TRUE(hostname);
+    EXPECT_EQ("foo-bar.example.isc.org", hostname->getValue());
+}
+
 // Test verifies that the server properly generates a FQDN when the client
 // FQDN name is blank, whether or not DDNS updates are enabled.  It also
 // verifies that the lease is only in the database following a DHCPREQUEST and
-// that the lesae contains the generated FQDN.
+// that the lease contains the generated FQDN.
 TEST_F(NameDhcpv4SrvTest, emptyFqdn) {
     Dhcp4Client client(Dhcp4Client::SELECTING);
     isc::asiolink::IOAddress expected_address("10.0.0.10");
@@ -1416,39 +1641,25 @@ TEST_F(NameDhcpv4SrvTest, emptyFqdn) {
 // the supported modes.
 TEST_F(NameDhcpv4SrvTest, replaceClientNameModeTest) {
 
-    // We pass mode labels in with enclosing quotes so we can also test
-    // unquoted boolean literals true/false
-    testReplaceClientNameMode("\"never\"",
+    testReplaceClientNameMode("never",
                               CLIENT_NAME_NOT_PRESENT, NAME_NOT_REPLACED);
-    testReplaceClientNameMode("\"never\"",
+    testReplaceClientNameMode("never",
                               CLIENT_NAME_PRESENT, NAME_NOT_REPLACED);
 
-    testReplaceClientNameMode("\"always\"",
+    testReplaceClientNameMode("always",
                               CLIENT_NAME_NOT_PRESENT, NAME_REPLACED);
-    testReplaceClientNameMode("\"always\"",
+    testReplaceClientNameMode("always",
                               CLIENT_NAME_PRESENT, NAME_REPLACED);
 
-    testReplaceClientNameMode("\"when-present\"",
+    testReplaceClientNameMode("when-present",
                               CLIENT_NAME_NOT_PRESENT, NAME_NOT_REPLACED);
-    testReplaceClientNameMode("\"when-present\"",
+    testReplaceClientNameMode("when-present",
                               CLIENT_NAME_PRESENT, NAME_REPLACED);
 
-    testReplaceClientNameMode("\"when-not-present\"",
+    testReplaceClientNameMode("when-not-present",
                               CLIENT_NAME_NOT_PRESENT, NAME_REPLACED);
-    testReplaceClientNameMode("\"when-not-present\"",
+    testReplaceClientNameMode("when-not-present",
                               CLIENT_NAME_PRESENT, NAME_NOT_REPLACED);
-
-    // Verify that boolean false produces the same result as RCM_NEVER
-    testReplaceClientNameMode("false",
-                              CLIENT_NAME_NOT_PRESENT, NAME_NOT_REPLACED);
-    testReplaceClientNameMode("false",
-                              CLIENT_NAME_PRESENT, NAME_NOT_REPLACED);
-
-    // Verify that boolean true produces the same result as RCM_WHEN_PRESENT
-    testReplaceClientNameMode("true",
-                              CLIENT_NAME_NOT_PRESENT, NAME_NOT_REPLACED);
-    testReplaceClientNameMode("true",
-                              CLIENT_NAME_PRESENT, NAME_REPLACED);
 }
 
 } // end of anonymous namespace

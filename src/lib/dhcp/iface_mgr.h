@@ -1,4 +1,4 @@
-// Copyright (C) 2011-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2011-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -58,7 +58,7 @@ public:
         isc::Exception(file, line, what) { };
 };
 
-/// @brief IfaceMgr exception thrown thrown when error occured during
+/// @brief IfaceMgr exception thrown thrown when error occurred during
 /// reading data from socket.
 class SocketReadError : public Exception {
 public:
@@ -66,8 +66,8 @@ public:
         isc::Exception(file, line, what) { };
 };
 
-/// @brief IfaceMgr exception thrown thrown when error occured during
-/// sedning data through socket.
+/// @brief IfaceMgr exception thrown thrown when error occurred during
+/// sending data through socket.
 class SocketWriteError : public Exception {
 public:
     SocketWriteError(const char* file, size_t line, const char* what) :
@@ -150,7 +150,7 @@ struct SocketInfo {
 /// may require use of fixed-size buffers. The size of such a buffer is
 /// returned by the OS kernel when the socket is opened. Hence, it is
 /// convenient to allocate the buffer when the socket is being opened and
-/// utilze it throughout the lifetime of the socket.
+/// utilize it throughout the lifetime of the socket.
 ///
 /// In order to avoid potentially expensive copies of the @c Iface objects
 /// holding pre-allocated buffers and multiple containers, this class is
@@ -303,7 +303,7 @@ public:
     /// @brief Check if the interface has the specified address assigned.
     ///
     /// @param address Address to be checked.
-    /// @return true if address is assigned to the intefrace, false otherwise.
+    /// @return true if address is assigned to the interface, false otherwise.
     bool hasAddress(const isc::asiolink::IOAddress& address) const;
 
     /// @brief Adds an address to an interface.
@@ -438,7 +438,7 @@ protected:
     /// Network interface name.
     std::string name_;
 
-    /// Interface index (a value that uniquely indentifies an interface).
+    /// Interface index (a value that uniquely identifies an interface).
     int ifindex_;
 
     /// List of assigned addresses.
@@ -595,6 +595,15 @@ public:
         return (test_mode_);
     }
 
+    /// @brief Allows or disallows the loopback interface
+    ///
+    /// By default the loopback interface is not considered when opening
+    /// sockets. This flag provides a way to relax this constraint.
+    ///
+    void setAllowLoopBack(const bool allow_loopback) {
+        allow_loopback_ = allow_loopback;
+    }
+
     /// @brief Check if packet be sent directly to the client having no address.
     ///
     /// Checks if IfaceMgr can send DHCPv4 packet to the client
@@ -724,7 +733,7 @@ public:
     /// (in microseconds)
     ///
     /// @throw isc::BadValue if timeout_usec is greater than one million
-    /// @throw isc::dhcp::SocketReadError if error occured when receiving a
+    /// @throw isc::dhcp::SocketReadError if error occurred when receiving a
     /// packet.
     /// @throw isc::dhcp::SignalInterruptOnSelect when a call to select() is
     /// interrupted by a signal.
@@ -746,7 +755,7 @@ public:
     /// (in microseconds)
     ///
     /// @throw isc::BadValue if timeout_usec is greater than one million
-    /// @throw isc::dhcp::SocketReadError if error occured when receiving a
+    /// @throw isc::dhcp::SocketReadError if error occurred when receiving a
     /// packet.
     /// @throw isc::dhcp::SignalInterruptOnSelect when a call to select() is
     /// interrupted by a signal.
@@ -838,8 +847,8 @@ public:
     ///
     /// This method opens sockets only on interfaces which have the
     /// @c inactive6_ field set to false (are active). If the interface is active
-    /// but it is not running, it is down, or is a loopback interface,
-    /// an error is reported.
+    /// but it is not running, it is down, or is a loopback interface when
+    /// loopback is not allowed, an error is reported.
     ///
     /// On the systems with multiple interfaces, it is often desired that the
     /// failure to open a socket on a particular interface doesn't cause a
@@ -877,14 +886,14 @@ public:
     /// @throw SocketOpenFailure if tried and failed to open socket.
     /// @return true if any sockets were open
     bool openSockets6(const uint16_t port = DHCP6_SERVER_PORT,
-                      IfaceMgrErrorMsgCallback error_handler = NULL);
+                      IfaceMgrErrorMsgCallback error_handler = 0);
 
     /// @brief Opens IPv4 sockets on detected interfaces.
     ///
     /// This method opens sockets only on interfaces which have the
     /// @c inactive4_ field set to false (are active). If the interface is active
-    /// but it is not running, it is down, or is a loopback interface,
-    /// an error is reported.
+    /// but it is not running, it is down, or is a loopback interface when
+    /// oopback is not allowed, an error is reported.
     ///
     /// The type of the socket being open depends on the selected Packet Filter
     /// represented by a class derived from @c isc::dhcp::PktFilter abstract
@@ -946,7 +955,7 @@ public:
     /// @return true if any sockets were open
     bool openSockets4(const uint16_t port = DHCP4_SERVER_PORT,
                       const bool use_bcast = true,
-                      IfaceMgrErrorMsgCallback error_handler = NULL);
+                      IfaceMgrErrorMsgCallback error_handler = 0);
 
     /// @brief Closes all open sockets.
     /// Is used in destructor, but also from Dhcpv4Srv and Dhcpv6Srv classes.
@@ -1010,7 +1019,7 @@ public:
     /// @throw PacketFilterChangeDenied if there are open IPv4 sockets.
     void setPacketFilter(const PktFilterPtr& packet_filter);
 
-    /// @brief Set packet filter object to handle sending and receving DHCPv6
+    /// @brief Set packet filter object to handle sending and receiving DHCPv6
     /// messages.
     ///
     /// Packet filter objects provide means for the @c IfaceMgr to open sockets
@@ -1043,7 +1052,7 @@ public:
     /// implementation that supports this feature on a particular OS.
     /// If there isn't, the PktFilterInet object will be set. If the
     /// argument is set to 'false', PktFilterInet object instance will
-    /// be set as the Packet Filter regrdaless of the OS type.
+    /// be set as the Packet Filter regardless of the OS type.
     ///
     /// @param direct_response_desired specifies whether the Packet Filter
     /// object being set should support direct traffic to the host
@@ -1194,7 +1203,7 @@ private:
     bool openMulticastSocket(Iface& iface,
                              const isc::asiolink::IOAddress& addr,
                              const uint16_t port,
-                             IfaceMgrErrorMsgCallback error_handler = NULL);
+                             IfaceMgrErrorMsgCallback error_handler = 0);
 
     /// Holds instance of a class derived from PktFilter, used by the
     /// IfaceMgr to open sockets and send/receive packets through these
@@ -1217,6 +1226,9 @@ private:
 
     /// @brief Indicates if the IfaceMgr is in the test mode.
     bool test_mode_;
+
+    /// @brief Allows to use loopback
+    bool allow_loopback_;
 };
 
 }; // namespace isc::dhcp

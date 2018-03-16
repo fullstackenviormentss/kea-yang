@@ -1,4 +1,4 @@
-// Copyright (C) 2013-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2013-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,8 +8,10 @@
 #define SERVER_HOOKS_H
 
 #include <exceptions/exceptions.h>
+#include <hooks/parking_lots.h>
 
 #include <boost/noncopyable.hpp>
+#include <boost/shared_ptr.hpp>
 
 #include <map>
 #include <string>
@@ -37,6 +39,8 @@ public:
         isc::Exception(file, line, what) {}
 };
 
+class ServerHooks;
+typedef boost::shared_ptr<ServerHooks> ServerHooksPtr;
 
 /// @brief Server hook collection
 ///
@@ -92,7 +96,7 @@ public:
     /// Returns the name of a hook given the index.  This is most likely to be
     /// used in log messages.
     ///
-    /// @param index Index of the hoold
+    /// @param index Index of the hook
     ///
     /// @return Name of the hook.
     ///
@@ -109,6 +113,17 @@ public:
     ///
     /// @throw NoSuchHook if the hook name is unknown to the caller.
     int getIndex(const std::string& name) const;
+
+    /// @brief Find hook index
+    ///
+    /// Provides exception safe method of retrieving an index of the
+    /// specified hook.
+    ///
+    /// @param name Name of the hook
+    ///
+    /// @return Index of the hook if the hook point exists, or -1 if the
+    /// hook point doesn't exist.
+    int findIndex(const std::string& name) const;
 
     /// @brief Return number of hooks
     ///
@@ -132,6 +147,60 @@ public:
     ///
     /// @return Reference to the global ServerHooks object.
     static ServerHooks& getServerHooks();
+
+    /// @brief Returns pointer to ServerHooks object.
+    ///
+    /// @return Pointer to the global ServerHooks object.
+    static ServerHooksPtr getServerHooksPtr();
+
+    /// @brief Returns pointer to all parking lots.
+    ///
+    /// @return pointer to all parking lots.
+    ParkingLotsPtr getParkingLotsPtr() const;
+
+    /// @brief Returns pointer to the ParkingLot for the specified hook index.
+    ///
+    /// @param hook_index index of the hook point for which the parking lot
+    /// should be returned.
+    /// @return Pointer to the ParkingLot object.
+    ParkingLotPtr getParkingLotPtr(const int hook_index);
+
+    /// @brief Returns pointer to the ParkingLot for the specified hook name.
+    ///
+    /// @param hook_name name of the hook point for which the parking lot
+    /// should be returned.
+    /// @return Pointer to the ParkingLot object.
+    ParkingLotPtr getParkingLotPtr(const std::string& hook_name);
+
+    /// @brief Generates hook point name for the given control command name.
+    ///
+    /// This function is called to generate the name of the hook point
+    /// when the hook point is used to install command handlers for the
+    /// given control command.
+    ///
+    /// The name of the hook point is generated as follows:
+    /// - command name is prefixed with a dollar sign,
+    /// - all hyphens are replaced with underscores.
+    ///
+    /// For example, if the command_name is 'foo-bar', the resulting hook
+    /// point name will be '$foo_bar'.
+    ///
+    /// @param command_name Command name for which the hook point name is
+    ///        to be generated.
+    ///
+    /// @return Hook point name, or an empty string if the command name
+    /// can't be converted to a hook name (e.g. when it lacks dollar sign).
+    static std::string commandToHookName(const std::string& command_name);
+
+    /// @brief Returns command name for a specified hook name.
+    ///
+    /// This function removes leading dollar sign and replaces underscores
+    /// with hyphens.
+    ///
+    /// @param hook_name Hook name for which command name should be returned.
+    ///
+    /// @return Command name.
+    static std::string hookToCommandName(const std::string& hook_name);
 
 private:
     /// @brief Constructor
@@ -167,6 +236,8 @@ private:
     /// simpler than using a multi-indexed container.)
     HookCollection  hooks_;                 ///< Hook name/index collection
     InverseHookCollection inverse_hooks_;   ///< Hook index/name collection
+
+    ParkingLotsPtr parking_lots_;
 };
 
 } // namespace util

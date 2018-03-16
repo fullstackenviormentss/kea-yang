@@ -1,4 +1,4 @@
-// Copyright (C) 2014-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2014-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -9,6 +9,8 @@
 
 #include <dhcp/option.h>
 #include <dhcp/option_space_container.h>
+#include <cc/cfg_to_element.h>
+#include <cc/user_context.h>
 #include <dhcpsrv/key_from_key.h>
 #include <boost/multi_index_container.hpp>
 #include <boost/multi_index/hashed_index.hpp>
@@ -29,7 +31,8 @@ namespace dhcp {
 /// for this option. This information comprises whether this option is sent
 /// to DHCP client only on request (persistent = false) or always
 /// (persistent = true).
-struct OptionDescriptor {
+class OptionDescriptor : public UserContext {
+public:
     /// @brief Option instance.
     OptionPtr option_;
 
@@ -61,9 +64,12 @@ struct OptionDescriptor {
     /// @param formatted_value option value in the textual format. Default
     /// value is empty indicating that the value is not set.
     OptionDescriptor(const OptionPtr& opt, bool persist,
-                     const std::string& formatted_value = "")
+                     const std::string& formatted_value = "",
+                     data::ConstElementPtr user_context = data::ConstElementPtr())
         : option_(opt), persistent_(persist),
-          formatted_value_(formatted_value) {};
+          formatted_value_(formatted_value) {
+        setContext(user_context);
+    };
 
     /// @brief Constructor
     ///
@@ -71,6 +77,15 @@ struct OptionDescriptor {
     OptionDescriptor(bool persist)
         : option_(OptionPtr()), persistent_(persist),
           formatted_value_() {};
+
+    /// @brief Constructor.
+    ///
+    /// @param desc descriptor
+    OptionDescriptor(const OptionDescriptor& desc)
+        : option_(desc.option_), persistent_(desc.persistent_),
+          formatted_value_(desc.formatted_value_) {
+        setContext(desc.getContext());
+    };
 
     /// @brief Checks if the one descriptor is equal to another.
     ///
@@ -183,6 +198,11 @@ typedef std::pair<OptionContainerTypeIndex::const_iterator,
                   OptionContainerTypeIndex::const_iterator> OptionContainerTypeRange;
 /// Type of the index #2 - option persistency flag.
 typedef OptionContainer::nth_index<2>::type OptionContainerPersistIndex;
+/// Pair of iterators to represent the range of options having the
+/// same persistency flag. The first element in this pair represents
+/// the beginning of the range, the second element represents the end.
+typedef std::pair<OptionContainerPersistIndex::const_iterator,
+                  OptionContainerPersistIndex::const_iterator> OptionContainerPersistRange;
 
 /// @brief Represents option data configuration for the DHCP server.
 ///
@@ -210,7 +230,7 @@ typedef OptionContainer::nth_index<2>::type OptionContainerPersistIndex;
 /// options is useful when the client requests stateless configuration from
 /// the DHCP server and no subnet is selected for this client. This client
 /// will only receive global options.
-class CfgOption {
+class CfgOption : public isc::data::CfgToElement {
 public:
 
     /// @brief default constructor
@@ -316,7 +336,7 @@ public:
     /// @brief Returns all options for the specified option space.
     ///
     /// This method will not return vendor options, i.e. having option space
-    /// name in the format of "vendor-X" where X is 32-bit unsiged integer.
+    /// name in the format of "vendor-X" where X is 32-bit unsigned integer.
     /// See @c getAll(uint32_t) for vendor options.
     ///
     /// @param option_space Name of the option space.
@@ -394,6 +414,11 @@ public:
     /// @return List comprising option space names for vendor options.
     std::list<std::string> getVendorIdsSpaceNames() const;
 
+    /// @brief Unparse a configuration object
+    ///
+    /// @return a pointer to unparsed configuration
+    virtual isc::data::ElementPtr toElement() const;
+
 private:
 
     /// @brief Appends encapsulated options to the options in an option space.
@@ -408,6 +433,16 @@ private:
     /// @param option_space Name of the option space containing option to
     /// which encapsulated options are appended.
     void encapsulateInternal(const std::string& option_space);
+
+    /// @brief Appends encapsulated options from the option space encapsulated
+    /// by the specified option.
+    ///
+    /// This method will go over all options belonging to the encapsulated space
+    /// and will check which option spaces they encapsulate recursively,
+    /// adding these options to the current option
+    ///
+    /// @param option which encapsulated options.
+    void encapsulateInternal(const OptionPtr& option);
 
     /// @brief Merges data from two option containers.
     ///

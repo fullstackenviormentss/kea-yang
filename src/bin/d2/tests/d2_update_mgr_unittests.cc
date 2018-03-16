@@ -1,4 +1,4 @@
-// Copyright (C) 2013-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2013-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,9 +8,9 @@
 
 #include <asiolink/io_service.h>
 #include <d2/d2_update_mgr.h>
-#include <util/time_utilities.h>
-#include <d_test_stubs.h>
 #include <nc_test_utils.h>
+#include <process/testutils/d_test_stubs.h>
+#include <util/time_utilities.h>
 
 #include <boost/function.hpp>
 #include <boost/bind.hpp>
@@ -23,6 +23,8 @@ using namespace std;
 using namespace isc;
 using namespace isc::dhcp_ddns;
 using namespace isc::d2;
+using namespace isc::process;
+using namespace isc::util;
 
 namespace {
 
@@ -483,7 +485,7 @@ TEST_F(D2UpdateMgrTest, checkFinishedTransaction) {
     // Verify that the list of transactions has decreased by two.
     EXPECT_EQ(canned_count_ - 2, update_mgr_->getTransactionCount());
 
-    // Vefity that the transaction list is correct.
+    // Verify that the transaction list is correct.
     EXPECT_TRUE(update_mgr_->hasTransaction(canned_ncrs_[0]->getDhcid()));
     EXPECT_FALSE(update_mgr_->hasTransaction(canned_ncrs_[1]->getDhcid()));
     EXPECT_TRUE(update_mgr_->hasTransaction(canned_ncrs_[2]->getDhcid()));

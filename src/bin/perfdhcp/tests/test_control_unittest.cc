@@ -1,4 +1,4 @@
-// Copyright (C) 2012-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2012-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -17,6 +17,7 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/foreach.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <stdint.h>
 #include <string>
@@ -31,7 +32,7 @@ using namespace isc::perfdhcp;
 
 /// \brief Test Control class with protected members made public.
 ///
-/// This class makes protected TestControl class'es member public
+/// This class makes protected TestControl class's members public
 /// to allow unit testing.
 class NakedTestControl: public TestControl {
 public:
@@ -623,7 +624,7 @@ public:
             // the case if randomization algorithm generates the same
             // values but this would be an error in randomization algorithm.
             total_dist += mismatch_dist;
-            // Mismatch may have occurred on the MAC address'es octet position
+            // Mismatch may have occurred on the MAC address's octet position
             // up to calculated earlier unequal_pos.
             ASSERT_LE(mismatch_dist, unequal_pos);
             // unique will inform if tested DUID is unique.
@@ -769,7 +770,7 @@ public:
 
         Pkt4Ptr ack = createAckPkt4(1);
 
-        // Create DHCPREQUST from DHCPACK.
+        // Create DHCPREQUEST from DHCPACK.
         Pkt4Ptr request;
         ASSERT_NO_THROW(request = tc.createRequestFromAck(ack));
 
@@ -1119,9 +1120,36 @@ TEST_F(TestControlTest, GenerateDuid) {
     // Simulate 50 clients. Different DUID will be generated.
     ASSERT_NO_THROW(processCmdLine("perfdhcp -l 127.0.0.1 -R 50 all"));
     testDuid();
+
+    // Checks that the random mac address returned by generateDuid
+    // is in the list of mac addresses in the mac-list.txt data file
+    std::string mac_list_full_path = getFullPath("mac-list.txt");
+    std::ostringstream cmd;
+    cmd << "perfdhcp -M " << mac_list_full_path << " abc";
+    ASSERT_NO_THROW(processCmdLine(cmd.str()));
+    // Initialize Test Controller.
+    NakedTestControl tc;
+    uint8_t randomized = 0;
+    std::vector<uint8_t> generated_duid = tc.generateDuid(randomized);
+
+    // Check that generated_duid is DUID_LL
+    ASSERT_EQ(10, generated_duid.size());
+    DuidPtr duid(new DUID(generated_duid));
+    ASSERT_EQ(duid->getType(), DUID::DUID_LL);
+
+    // Make sure it's on the list
+    CommandOptions& options = CommandOptions::instance();
+    const CommandOptions::MacAddrsVector& macs = options.getMacsFromFile();
+    // DUID LL comprises 2 bytes of duid type, 2 bytes of hardware type,
+    // then 6 bytes of HW address.
+    vector<uint8_t> mac(6);
+    std::copy(generated_duid.begin() + 4, generated_duid.begin() + 10,
+              mac.begin());
+    // Check that mac is in macs.
+    ASSERT_TRUE(std::find(macs.begin(), macs.end(), mac) != macs.end());
 }
 
-TEST_F(TestControlTest, MisMatchVerionServer) {
+TEST_F(TestControlTest, MisMatchVersionServer) {
     NakedTestControl tc;
 
     // make sure we catch -6 paired with v4 address
@@ -1142,6 +1170,24 @@ TEST_F(TestControlTest, GenerateMacAddress) {
     // Simulate 50 clients. Different MAC addresses will be generated.
     ASSERT_NO_THROW(processCmdLine("perfdhcp -l 127.0.0.1 -R 50 all"));
     testMacAddress();
+
+    // Checks that the random mac address returned by generateMacAddress
+    // is in the list of mac addresses in the mac-list.txt data file
+    std::string mac_list_full_path = getFullPath("mac-list.txt");
+    std::ostringstream cmd;
+    cmd << "perfdhcp -M " << mac_list_full_path << " abc";
+    ASSERT_NO_THROW(processCmdLine(cmd.str()));
+    // Initialize Test Controller.
+    NakedTestControl tc;
+    uint8_t randomized = 0;
+    // Generate MAC address and sanity check its size.
+    std::vector<uint8_t> mac = tc.generateMacAddress(randomized);
+    ASSERT_EQ(6, mac.size());
+    // Make sure that the generated MAC address belongs to the MAC addresses
+    // read from a file.
+    CommandOptions& options = CommandOptions::instance();
+    const CommandOptions::MacAddrsVector& macs = options.getMacsFromFile();
+    ASSERT_TRUE(std::find(macs.begin(), macs.end(), mac) !=  macs.end());
 }
 
 TEST_F(TestControlTest, Options4) {
@@ -1362,6 +1408,45 @@ TEST_F(TestControlTest, Packet6) {
         EXPECT_EQ(DHCP6_SERVER_PORT, pkt6->getRemotePort());
         EXPECT_EQ(sock.addr_, pkt6->getLocalAddr());
         EXPECT_EQ(asiolink::IOAddress("FF05::1:3"), pkt6->getRemoteAddr());
+        // Packet must not be relayed.
+        EXPECT_TRUE(pkt6->relay_info_.empty());
+
+    } else {
+        std::cout << "Unable to find the loopback interface. Skip test. "
+                  << std::endl;
+    }
+}
+
+TEST_F(TestControlTest, Packet6Relayed) {
+    // Use Interface Manager to get the local loopback interface.
+    // If the interface can't be found we don't want to fail test.
+    std::string loopback_iface(getLocalLoopback());
+    if (!loopback_iface.empty()) {
+        ASSERT_NO_THROW(processCmdLine("perfdhcp -6 -l " + loopback_iface +
+                                       " -A1 -L 10547 servers"));
+        NakedTestControl tc;
+        int sock_handle = 0;
+        // Create the socket. It will be needed to set packet's
+        // parameters.
+        ASSERT_NO_THROW(sock_handle = tc.openSocket());
+        TestControl::TestControlSocket sock(sock_handle);
+        uint32_t transid = 123;
+        boost::shared_ptr<Pkt6> pkt6(new Pkt6(DHCPV6_SOLICIT, transid));
+        // Set packet's parameters.
+        ASSERT_NO_THROW(tc.setDefaults6(sock, pkt6));
+        // Validate if parameters have been set correctly.
+        EXPECT_EQ(loopback_iface, pkt6->getIface());
+        EXPECT_EQ(sock.ifindex_, pkt6->getIndex());
+        EXPECT_EQ(DHCP6_CLIENT_PORT, pkt6->getLocalPort());
+        EXPECT_EQ(DHCP6_SERVER_PORT, pkt6->getRemotePort());
+        EXPECT_EQ(sock.addr_, pkt6->getLocalAddr());
+        EXPECT_EQ(asiolink::IOAddress("FF05::1:3"), pkt6->getRemoteAddr());
+        // Packet should be relayed.
+        EXPECT_EQ(pkt6->relay_info_.size(), 1);
+        EXPECT_EQ(pkt6->relay_info_[0].hop_count_, 1);
+        EXPECT_EQ(pkt6->relay_info_[0].msg_type_, DHCPV6_RELAY_FORW);
+        EXPECT_EQ(pkt6->relay_info_[0].linkaddr_, sock.addr_);
+        EXPECT_EQ(pkt6->relay_info_[0].peeraddr_, sock.addr_);
     } else {
         std::cout << "Unable to find the loopback interface. Skip test. "
                   << std::endl;

@@ -1,4 +1,4 @@
-// Copyright (C) 2012-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2012-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -63,11 +63,15 @@ public:
     ///        -end specific, although must include the "type" keyword which
     ///        gives the backend in use.
     ///
+    /// @param db_lost_callback function to invoke if connectivity to lease
+    /// database is lost.
+    ///
     /// @throw isc::InvalidParameter dbaccess string does not contain the "type"
     ///        keyword.
     /// @throw isc::dhcp::InvalidType The "type" keyword in dbaccess does not
     ///        identify a supported backend.
-    static void create(const std::string& dbaccess);
+    static void create(const std::string& dbaccess, 
+                       DatabaseConnection::DbLostCallback db_lost_callback = 0);
 
     /// @brief Destroy lease manager
     ///
@@ -85,7 +89,10 @@ public:
     ///        create() to create one before calling this method.
     static LeaseMgr& instance();
 
-
+    /// @brief Indicates if the lease manager has been instantiated.
+    ///
+    /// @return True if the lease manager instance exists, false otherwise.
+    static bool haveInstance();
 
 private:
     /// @brief Hold pointer to lease manager

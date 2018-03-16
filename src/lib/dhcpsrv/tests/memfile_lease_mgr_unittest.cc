@@ -1,4 +1,4 @@
-// Copyright (C) 2012-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2012-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,6 +6,7 @@
 
 #include <config.h>
 #include <asiolink/asio_wrapper.h>
+#include <asiolink/interval_timer.h>
 #include <asiolink/io_address.h>
 #include <dhcp/duid.h>
 #include <dhcp/iface_mgr.h>
@@ -14,7 +15,7 @@
 #include <dhcpsrv/lease_mgr_factory.h>
 #include <dhcpsrv/memfile_lease_mgr.h>
 #include <dhcpsrv/timer_mgr.h>
-#include <dhcpsrv/tests/lease_file_io.h>
+#include <dhcpsrv/testutils/lease_file_io.h>
 #include <dhcpsrv/tests/test_utils.h>
 #include <dhcpsrv/tests/generic_lease_mgr_unittest.h>
 #include <util/pid_file.h>
@@ -102,7 +103,10 @@ public:
     MemfileLeaseMgrTest() :
         io4_(getLeaseFilePath("leasefile4_0.csv")),
         io6_(getLeaseFilePath("leasefile6_0.csv")),
+        io_service_(new IOService()),
         timer_mgr_(TimerMgr::instance()) {
+
+        timer_mgr_->setIOService(io_service_);
 
         std::ostringstream s;
         s << KEA_LFC_BUILD_DIR << "/kea-lfc";
@@ -130,7 +134,6 @@ public:
     /// destroys lease manager backend.
     virtual ~MemfileLeaseMgrTest() {
         // Stop TimerMgr worker thread if it is running.
-        timer_mgr_->stopThread();
         // Make sure there are no timers registered.
         timer_mgr_->unregisterTimers();
         LeaseMgrFactory::destroy();
@@ -143,7 +146,7 @@ public:
     /// @brief Remove files being products of Lease File Cleanup.
     ///
     /// @param base_name Path to the lease file name. This file is removed
-    /// and all files which names are crated from this name (having specific
+    /// and all files which names are created from this name (having specific
     /// suffixes used by Lease File Cleanup mechanism).
     void removeFiles(const std::string& base_name) const {
         // Generate suffixes and append them to the base name. The
@@ -185,7 +188,8 @@ public:
         std::ostringstream s;
         s << "type=memfile " << (u == V4 ? "universe=4 " : "universe=6 ")
           << "name="
-          << getLeaseFilePath(u == V4 ? "leasefile4_0.csv" : "leasefile6_0.csv");
+          << getLeaseFilePath(u == V4 ? "leasefile4_0.csv" : "leasefile6_0.csv")
+          << " lfc-interval=0";
         return (s.str());
     }
 
@@ -207,12 +211,13 @@ public:
     ///
     /// @param ms Duration in milliseconds.
     void setTestTime(const uint32_t ms) {
-        // Measure test time and exit if timeout hit.
-        Stopwatch stopwatch;
-        while (stopwatch.getTotalMilliseconds() < ms) {
-            // Block for one 1 millisecond.
-            IfaceMgr::instance().receive6(0, 1000);
-        }
+        IntervalTimer timer(*io_service_);
+        timer.setup([this]() {
+                io_service_->stop();
+        }, ms, IntervalTimer::ONE_SHOT);
+
+        io_service_->run();
+        io_service_->get_io_service().reset();
     }
 
     /// @brief Waits for the specified process to finish.
@@ -344,6 +349,9 @@ public:
     /// @brief Object providing access to v6 lease IO.
     LeaseFileIO io6_;
 
+    /// @brief Pointer to the IO service used by the tests.
+    IOServicePtr io_service_;
+
     /// @brief Pointer to the instance of the @c TimerMgr.
     TimerMgrPtr timer_mgr_;
 };
@@ -375,6 +383,12 @@ TEST_F(MemfileLeaseMgrTest, constructor) {
     EXPECT_THROW(lease_mgr.reset(new Memfile_LeaseMgr(pmap)), isc::BadValue);
 }
 
+// Checks if there is no lease manager NoLeaseManager is thrown.
+TEST_F(MemfileLeaseMgrTest, noLeaseManager) {
+    LeaseMgrFactory::destroy();
+    EXPECT_THROW(LeaseMgrFactory::instance(), NoLeaseManager);
+}
+
 // Checks if the getType() and getName() methods both return "memfile".
 TEST_F(MemfileLeaseMgrTest, getTypeAndName) {
     startBackend(V4);
@@ -403,7 +417,7 @@ TEST_F(MemfileLeaseMgrTest, getLeaseFilePath) {
     EXPECT_TRUE(lease_mgr->getLeaseFilePath(Memfile_LeaseMgr::V6).empty());
 }
 
-// Check if the persitLeases correctly checks that leases should not be written
+// Check if the persistLeases correctly checks that leases should not be written
 // to disk when disabled through configuration.
 TEST_F(MemfileLeaseMgrTest, persistLeases) {
     // Initialize IO objects, so as the test csv files get removed after the
@@ -413,6 +427,7 @@ TEST_F(MemfileLeaseMgrTest, persistLeases) {
 
     DatabaseConnection::ParameterMap pmap;
     pmap["universe"] = "4";
+    pmap["lfc-interval"] = "0";
     // Specify the names of the lease files. Leases will be written.
     pmap["name"] = getLeaseFilePath("leasefile4_1.csv");
     boost::scoped_ptr<Memfile_LeaseMgr> lease_mgr(new Memfile_LeaseMgr(pmap));
@@ -447,14 +462,8 @@ TEST_F(MemfileLeaseMgrTest, lfcTimer) {
     boost::scoped_ptr<LFCMemfileLeaseMgr>
         lease_mgr(new LFCMemfileLeaseMgr(pmap));
 
-    // Start worker thread to execute LFC periodically.
-    ASSERT_NO_THROW(timer_mgr_->startThread());
-
     // Run the test for at most 2.9 seconds.
     setTestTime(2900);
-
-    // Stop worker thread.
-    ASSERT_NO_THROW(timer_mgr_->stopThread());
 
     // Within 2.9 we should record two LFC executions.
     EXPECT_EQ(2, lease_mgr->getLFCCount());
@@ -474,16 +483,8 @@ TEST_F(MemfileLeaseMgrTest, lfcTimerDisabled) {
     boost::scoped_ptr<LFCMemfileLeaseMgr>
         lease_mgr(new LFCMemfileLeaseMgr(pmap));
 
-    // Start worker thread to execute LFC periodically.
-    ASSERT_NO_THROW(timer_mgr_->startThread());
-
     // Run the test for at most 1.9 seconds.
     setTestTime(1900);
-
-    // Stop worker thread to make sure it is not running when lease
-    // manager is destroyed. The lease manager will be unable to
-    // unregster timer when the thread is active.
-    ASSERT_NO_THROW(timer_mgr_->stopThread());
 
     // There should be no LFC execution recorded.
     EXPECT_EQ(0, lease_mgr->getLFCCount());
@@ -541,7 +542,8 @@ TEST_F(MemfileLeaseMgrTest, leaseFileCleanup4) {
     // Check if we can still write to the lease file.
     std::vector<uint8_t> hwaddr_vec(6);
     HWAddrPtr hwaddr(new HWAddr(hwaddr_vec, HTYPE_ETHER));
-    Lease4Ptr new_lease(new Lease4(IOAddress("192.0.2.45"), hwaddr, 0, 0,
+    Lease4Ptr new_lease(new Lease4(IOAddress("192.0.2.45"), hwaddr,
+                                   static_cast<const uint8_t*>(0), 0,
                                    100, 50, 60, 0, 1));
     ASSERT_NO_THROW(lease_mgr->addLease(new_lease));
 
@@ -872,7 +874,7 @@ TEST_F(MemfileLeaseMgrTest, getLease4ClientIdHWAddrSubnetId) {
 /// @brief Basic Lease4 Checks
 ///
 /// Checks that the addLease, getLease4(by address), getLease4(hwaddr,subnet_id),
-/// updateLease4() and deleteLease (IPv4 address) can handle NULL client-id.
+/// updateLease4() and deleteLease can handle NULL client-id.
 /// (client-id is optional and may not be present)
 TEST_F(MemfileLeaseMgrTest, lease4NullClientId) {
     startBackend(V4);
@@ -914,6 +916,18 @@ TEST_F(MemfileLeaseMgrTest, getLease4ClientIdSize) {
 TEST_F(MemfileLeaseMgrTest, getLease4ClientIdSubnetId) {
     startBackend(V4);
     testGetLease4ClientIdSubnetId();
+}
+
+// This test checks that all IPv4 leases for a specified subnet id are returned.
+TEST_F(MemfileLeaseMgrTest, getLeases4SubnetId) {
+    startBackend(V4);
+    testGetLeases4SubnetId();
+}
+
+// This test checks that all IPv4 leases are returned.
+TEST_F(MemfileLeaseMgrTest, getLeases4) {
+    startBackend(V4);
+    testGetLeases4();
 }
 
 /// @brief Basic Lease6 Checks
@@ -1230,7 +1244,7 @@ TEST_F(MemfileLeaseMgrTest, load4LFCInProgress) {
     ASSERT_THROW(lease_mgr.reset(new NakedMemfileLeaseMgr(pmap)),
                  DbOpenError);
 
-    // Remove the pid file, and retry. The bakckend should be created.
+    // Remove the pid file, and retry. The backend should be created.
     pid_file.deleteFile();
     ASSERT_NO_THROW(lease_mgr.reset(new NakedMemfileLeaseMgr(pmap)));
 }
@@ -1480,7 +1494,7 @@ TEST_F(MemfileLeaseMgrTest, load6LFCInProgress) {
     ASSERT_THROW(lease_mgr.reset(new NakedMemfileLeaseMgr(pmap)),
                  DbOpenError);
 
-    // Remove the pid file, and retry. The bakckend should be created.
+    // Remove the pid file, and retry. The backend should be created.
     pid_file.deleteFile();
     ASSERT_NO_THROW(lease_mgr.reset(new NakedMemfileLeaseMgr(pmap)));
 }
@@ -1634,6 +1648,7 @@ TEST_F(MemfileLeaseMgrTest, lease4ContainerIndexUpdate) {
     pmap["universe"] = "4";
     pmap["name"] = leasefile;
     pmap["persist"] = "true";
+    pmap["lfc-interval"] = "0";
 
     srand(seed);
 
@@ -1647,7 +1662,7 @@ TEST_F(MemfileLeaseMgrTest, lease4ContainerIndexUpdate) {
     // pick a lease.
     std::vector<IOAddress> lease_addresses;
 
-    // Generarate random leases. We remember their addresses in
+    // Generate random leases. We remember their addresses in
     // lease_addresses.
     for (uint32_t i = 0; i < leases_cnt; ++i) {
         Lease4Ptr lease = initiateRandomLease4(addr);
@@ -1773,6 +1788,7 @@ TEST_F(MemfileLeaseMgrTest, lease6ContainerIndexUpdate) {
     pmap["universe"] = "6";
     pmap["name"] = leasefile;
     pmap["persist"] = "true";
+    pmap["lfc-interval"] = "0";
 
     srand(seed);
 
@@ -1786,7 +1802,7 @@ TEST_F(MemfileLeaseMgrTest, lease6ContainerIndexUpdate) {
     // pick a lease.
     std::vector<IOAddress> lease_addresses;
 
-    // Generarate random leases. We remember their addresses in
+    // Generate random leases. We remember their addresses in
     // lease_addresses.
     for (uint32_t i = 0; i < leases_cnt; ++i) {
         Lease6Ptr lease = initiateRandomLease6(addr);
@@ -1883,6 +1899,28 @@ TEST_F(MemfileLeaseMgrTest, lease6ContainerIndexUpdate) {
     }
 }
 
+// Verifies that IPv4 lease statistics can be recalculated.
+TEST_F(MemfileLeaseMgrTest, recountLeaseStats4) {
+    startBackend(V4);
+    testRecountLeaseStats4();
+}
 
+// Verifies that IPv6 lease statistics can be recalculated.
+TEST_F(MemfileLeaseMgrTest, recountLeaseStats6) {
+    startBackend(V6);
+    testRecountLeaseStats6();
+}
 
-}; // end of anonymous namespace
+// Tests that leases from specific subnet can be removed.
+TEST_F(MemfileLeaseMgrTest, wipeLeases4) {
+    startBackend(V4);
+    testWipeLeases4();
+}
+
+// Tests that leases from specific subnet can be removed.
+TEST_F(MemfileLeaseMgrTest, wipeLeases6) {
+    startBackend(V6);
+    testWipeLeases6();
+}
+
+}  // namespace

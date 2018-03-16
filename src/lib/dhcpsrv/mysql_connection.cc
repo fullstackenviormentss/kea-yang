@@ -1,18 +1,19 @@
-// Copyright (C) 2012-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2012-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 
-#include <dhcpsrv/dhcpsrv_log.h>
+#include <config.h>
+
+#include <dhcpsrv/db_log.h>
 #include <dhcpsrv/mysql_connection.h>
 #include <exceptions/exceptions.h>
 
 #include <boost/lexical_cast.hpp>
 
 #include <algorithm>
-#include <iterator>
 #include <stdint.h>
 #include <string>
 #include <limits>
@@ -29,7 +30,8 @@ const my_bool MLM_TRUE = 1;
 const int MLM_MYSQL_FETCH_SUCCESS = 0;
 const int MLM_MYSQL_FETCH_FAILURE = 1;
 
-const int MYSQL_DEFAULT_CONNECTION_TIMEOUT = 5;	// seconds
+/// @todo: Migrate this default value to src/bin/dhcpX/simple_parserX.cc
+const int MYSQL_DEFAULT_CONNECTION_TIMEOUT = 5; // seconds
 
 MySqlTransaction::MySqlTransaction(MySqlConnection& conn)
     : conn_(conn), committed_(false) {
@@ -64,6 +66,33 @@ MySqlConnection::openDatabase() {
         host = shost.c_str();
     } catch (...) {
         // No host.  Fine, we'll use "localhost"
+    }
+
+    unsigned int port = 0;
+    string sport;
+    try {
+        sport = getParameter("port");
+    } catch (...) {
+        // No port parameter, we are going to use the default port.
+        sport = "";
+    }
+
+    if (sport.size() > 0) {
+        // Port was given, so try to convert it to an integer.
+
+        try {
+            port = boost::lexical_cast<unsigned int>(sport);
+        } catch (...) {
+            // Port given but could not be converted to an unsigned int.
+            // Just fall back to the default value.
+            port = 0;
+        }
+
+        // The port is only valid when it is in the 0..65535 range.
+        // Again fall back to the default when the given value is invalid.
+        if (port > numeric_limits<uint16_t>::max()) {
+            port = 0;
+        }
     }
 
     const char* user = NULL;
@@ -116,7 +145,7 @@ MySqlConnection::openDatabase() {
         }
 
         // The timeout is only valid if greater than zero, as depending on the
-        // database, a zero timeout might signify someting like "wait
+        // database, a zero timeout might signify something like "wait
         // indefinitely".
         //
         // The check below also rejects a value greater than the maximum
@@ -133,13 +162,22 @@ MySqlConnection::openDatabase() {
 
     // Set options for the connection:
     //
-    // Automatic reconnection: after a period of inactivity, the client will
-    // disconnect from the database.  This option causes it to automatically
-    // reconnect when another operation is about to be done.
-    my_bool auto_reconnect = MLM_TRUE;
+    // Set options for the connection:
+    // Make sure auto_reconnect is OFF! Enabling it leaves us with an unusable
+    // connection after a reconnect as among other things, it drops all our
+    // pre-compiled statements.
+    my_bool auto_reconnect = MLM_FALSE;
     int result = mysql_options(mysql_, MYSQL_OPT_RECONNECT, &auto_reconnect);
     if (result != 0) {
         isc_throw(DbOpenError, "unable to set auto-reconnect option: " <<
+                  mysql_error(mysql_));
+    }
+
+    // Make sure we have a large idle time window ... say 30 days...
+    const char *wait_time = "SET SESSION wait_timeout = 30 * 86400";
+    result = mysql_options(mysql_, MYSQL_INIT_COMMAND, wait_time);
+    if (result != 0) {
+        isc_throw(DbOpenError, "unable to set wait_timeout " <<
                   mysql_error(mysql_));
     }
 
@@ -173,7 +211,7 @@ MySqlConnection::openDatabase() {
     // because no row matching the WHERE clause was found, or because a
     // row was found but no data was altered.
     MYSQL* status = mysql_real_connect(mysql_, host, user, password, name,
-                                       0, NULL, CLIENT_FOUND_ROWS);
+                                       port, NULL, CLIENT_FOUND_ROWS);
     if (status != mysql_) {
         isc_throw(DbOpenError, mysql_error(mysql_));
     }
@@ -213,20 +251,24 @@ MySqlConnection::prepareStatement(uint32_t index, const char* text) {
 }
 
 void
-MySqlConnection::prepareStatements(const TaggedStatement tagged_statements[],
-                                   size_t num_statements) {
-    // Allocate space for all statements
-    statements_.clear();
-    statements_.resize(num_statements, NULL);
-
-    text_statements_.clear();
-    text_statements_.resize(num_statements, std::string(""));
-
+MySqlConnection::prepareStatements(const TaggedStatement* start_statement,
+                                   const TaggedStatement* end_statement) {
     // Created the MySQL prepared statements for each DML statement.
-    for (int i = 0; tagged_statements[i].text != NULL; ++i) {
-        prepareStatement(tagged_statements[i].index,
-                         tagged_statements[i].text);
+    for (const TaggedStatement* tagged_statement = start_statement;
+         tagged_statement != end_statement; ++tagged_statement) {
+        if (tagged_statement->index >= statements_.size()) {
+            statements_.resize(tagged_statement->index + 1, NULL);
+            text_statements_.resize(tagged_statement->index + 1,
+                                    std::string(""));
+        }
+        prepareStatement(tagged_statement->index,
+                         tagged_statement->text);
     }
+}
+
+void MySqlConnection::clearStatements() {
+    statements_.clear();
+    text_statements_.clear();
 }
 
 /// @brief Destructor
@@ -328,8 +370,7 @@ MySqlConnection::convertFromDatabaseTime(const MYSQL_TIME& expire,
 
 void
 MySqlConnection::startTransaction() {
-    LOG_DEBUG(dhcpsrv_logger, DHCPSRV_DBG_TRACE_DETAIL,
-              DHCPSRV_MYSQL_START_TRANSACTION);
+    DB_LOG_DEBUG(DB_DBG_TRACE_DETAIL, MYSQL_START_TRANSACTION);
     // We create prepared statements for all other queries, but MySQL
     // don't support prepared statements for START TRANSACTION.
     int status = mysql_query(mysql_, "START TRANSACTION");
@@ -341,7 +382,7 @@ MySqlConnection::startTransaction() {
 
 void
 MySqlConnection::commit() {
-    LOG_DEBUG(dhcpsrv_logger, DHCPSRV_DBG_TRACE_DETAIL, DHCPSRV_MYSQL_COMMIT);
+    DB_LOG_DEBUG(DB_DBG_TRACE_DETAIL, MYSQL_COMMIT);
     if (mysql_commit(mysql_) != 0) {
         isc_throw(DbOperationError, "commit failed: "
                   << mysql_error(mysql_));
@@ -350,7 +391,7 @@ MySqlConnection::commit() {
 
 void
 MySqlConnection::rollback() {
-    LOG_DEBUG(dhcpsrv_logger, DHCPSRV_DBG_TRACE_DETAIL, DHCPSRV_MYSQL_ROLLBACK);
+    DB_LOG_DEBUG(DB_DBG_TRACE_DETAIL, MYSQL_ROLLBACK);
     if (mysql_rollback(mysql_) != 0) {
         isc_throw(DbOperationError, "rollback failed: "
                   << mysql_error(mysql_));

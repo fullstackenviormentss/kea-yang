@@ -4,6 +4,7 @@
 *.la
 *.lo
 *.o
+*~
 .deps/
 .libs/
 __pycache__/
@@ -35,6 +36,7 @@ config.h.in~
 /py-compile
 /stamp-h1
 /test-driver
+/ylwrap
 
 /all.info
 /coverage-cpp-html
@@ -42,3 +44,4 @@ config.h.in~
 /local.zone.sqlite3
 /logger_lockfile
 /report.info
+

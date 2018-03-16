@@ -1,11 +1,14 @@
-// Copyright (C) 2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2015-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+#include <config.h>
+
 #include <dhcpsrv/database_connection.h>
-#include <dhcpsrv/dhcpsrv_log.h>
+#include <dhcpsrv/db_exceptions.h>
+#include <dhcpsrv/db_log.h>
 #include <exceptions/exceptions.h>
 
 #include <boost/algorithm/string.hpp>
@@ -47,7 +50,7 @@ DatabaseConnection::parse(const std::string& dbaccess) {
                 string value = token.substr(pos + 1);
                 mapped_tokens.insert(make_pair(name, value));
             } else {
-                LOG_ERROR(dhcpsrv_logger, DHCPSRV_INVALID_ACCESS).arg(dbaccess);
+                DB_LOG_ERROR(DB_INVALID_ACCESS).arg(dbaccess);
                 isc_throw(InvalidParameter, "Cannot parse " << token
                           << ", expected format is name=value");
             }
@@ -84,6 +87,61 @@ DatabaseConnection::redactedAccessString(const ParameterMap& parameters) {
     }
 
     return (access);
+}
+
+bool
+DatabaseConnection::configuredReadOnly() const {
+    std::string readonly_value = "false";
+    try {
+        readonly_value = getParameter("readonly");
+        boost::algorithm::to_lower(readonly_value);
+    } catch (...) {
+        // Parameter "readonly" hasn't been specified so we simply use
+        // the default value of "false".
+    }
+
+    if ((readonly_value != "false") && (readonly_value != "true")) {
+        isc_throw(DbInvalidReadOnly, "invalid value '" << readonly_value
+                  << "' specified for boolean parameter 'readonly'");
+    }
+
+    return (readonly_value == "true");
+}
+
+ReconnectCtlPtr
+DatabaseConnection::makeReconnectCtl() const {
+    ReconnectCtlPtr retry;
+    unsigned int retries = 0;
+    unsigned int interval = 0;
+
+    // Assumes that parsing ensurse only valid values are present
+    std::string parm_str;
+    try {
+        parm_str = getParameter("max-reconnect-tries");
+        retries = boost::lexical_cast<unsigned int>(parm_str);
+    } catch (...) {
+        // Wasn't specified so  so we'll use default of 0;
+    }
+
+    try {
+        parm_str = getParameter("reconnect-wait-time");
+        interval = boost::lexical_cast<unsigned int>(parm_str);
+    } catch (...) {
+        // Wasn't specified so  so we'll use default of 0;
+    }
+
+    retry.reset(new ReconnectCtl(retries, interval));
+    return (retry);
+}
+
+bool
+DatabaseConnection::invokeDbLostCallback() const {
+    if (db_lost_callback_ != NULL) {
+        // Invoke the callback, passing in a new instance of ReconnectCtl
+        return (db_lost_callback_)(makeReconnectCtl());
+    }
+
+    return (false);
 }
 
 };

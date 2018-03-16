@@ -1,4 +1,4 @@
-// Copyright (C) 2014-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2014-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -15,18 +15,19 @@ namespace isc {
 namespace dhcp {
 namespace test {
 
+/// @brief typedefs to simplify lease statistic testing
+typedef std::map<std::string, int64_t> StatValMap;
+typedef std::pair<std::string, int64_t> StatValPair;
+typedef std::vector<StatValMap> StatValMapList;
+
 /// @brief Test Fixture class with utility functions for LeaseMgr backends
 ///
 /// It contains utility functions, like dummy lease creation.
 /// All concrete LeaseMgr test classes should be derived from it.
 class GenericLeaseMgrTest : public ::testing::Test {
 public:
-
     /// @brief Universe (V4 or V6).
-    enum Universe {
-        V4,
-        V6
-    };
+    enum Universe { V4, V6 };
 
     /// @brief Default constructor.
     GenericLeaseMgrTest();
@@ -94,6 +95,47 @@ public:
     /// @return vector<Lease6Ptr> Vector of pointers to leases
     std::vector<Lease6Ptr> createLeases6();
 
+    /// @brief Compares a StatsMgr statistic to an expected value
+    ///
+    /// Attempt to fetch the named statistic from the StatsMg and if
+    /// found, compare its observed value to the given value.
+    /// Fails if the stat is not found or if the values do not match.
+    ///
+    /// @param name StatsMgr name for the statistic to check
+    /// @param expected_value expected value of the statistic
+    void checkStat(const std::string& name, const int64_t expected_value);
+
+    /// @brief Compares StatsMgr statistics against an expected list of values
+    ///
+    /// Iterates over a list of statistic names and expected values, attempting
+    /// to fetch each from the StatsMgr and if found, compare its observed value
+    /// to the expected value.  Fails if any of the expected stats are not
+    /// found or if the values do not match.
+    ///
+    /// @param expected_stats Map of expected static names and values.
+    void checkLeaseStats(const StatValMapList& expected_stats);
+
+    /// @brief Constructs a minimal IPv4 lease and adds it to the lease storage
+    ///
+    /// @param address - IPv4 address for the lease
+    /// @param subnet_id - subnet ID to which the lease belongs
+    /// @param state - the state of the lease
+    void makeLease4(const std::string& address, const SubnetID& subnet_id,
+                    const uint32_t state = Lease::STATE_DEFAULT);
+
+    /// @brief Constructs a minimal IPv6 lease and adds it to the lease storage
+    ///
+    /// The DUID is constructed from the address and prefix length.
+    ///
+    /// @param type - type of lease to create (TYPE_NA, TYPE_PD...)
+    /// @param address - IPv6 address/prefix for the lease
+    /// @param prefix_len = length of the prefix (should be 0 for TYPE_NA)
+    /// @param subnet_id - subnet ID to which the lease belongs
+    /// @param state - the state of the lease
+    void makeLease6(const Lease::Type& type, const std::string& address,
+                    uint8_t prefix_len, const SubnetID& subnet_id,
+                    const uint32_t state = Lease::STATE_DEFAULT);
+
     /// @brief checks that addLease, getLease4(addr) and deleteLease() works
     void testBasicLease4();
 
@@ -118,10 +160,10 @@ public:
     /// @brief Test lease retrieval using client id, HW address and subnet id.
     void testGetLease4ClientIdHWAddrSubnetId();
 
-    // @brief Get lease4 by hardware address (2)
-    //
-    // Check that the system can cope with getting a hardware address of
-    // any size.
+    /// @brief Get lease4 by hardware address (2)
+    ///
+    /// Check that the system can cope with getting a hardware address of
+    /// any size.
     void testGetLease4HWAddrSize();
 
     /// @brief Check GetLease4 methods - access by Hardware Address & Subnet ID
@@ -152,6 +194,12 @@ public:
     /// Adds leases to the database and checks that they can be accessed via
     /// a combination of client and subnet IDs.
     void testGetLease4ClientIdSubnetId();
+
+    /// @brief Test method which returns all IPv4 leases for Subnet ID.
+    void testGetLeases4SubnetId();
+
+    /// @brief Test method which returns all IPv4 leases.
+    void testGetLeases4();
 
     /// @brief Basic Lease4 Checks
     ///
@@ -260,7 +308,7 @@ public:
     /// @brief Checks that the expired DHCPv4 leases can be retrieved.
     ///
     /// This test checks the following:
-    /// - all expired and not reclaimed leases are retured
+    /// - all expired and not reclaimed leases are returned
     /// - number of leases returned can be limited
     /// - leases are returned in the order from the most expired to the
     ///   least expired
@@ -270,7 +318,7 @@ public:
     /// @brief Checks that the expired IPv6 leases can be retrieved.
     ///
     /// This test checks the following:
-    /// - all expired and not reclaimed leases are retured
+    /// - all expired and not reclaimed leases are returned
     /// - number of leases returned can be limited
     /// - leases are returned in the order from the most expired to the
     ///   least expired
@@ -312,6 +360,33 @@ public:
     /// as expired-reclaimed. It later verifies that the expired-reclaimed
     /// leases can be removed.
     void testDeleteExpiredReclaimedLeases4();
+
+    /// @brief Check that the IPv4 lease statistics can be recounted
+    ///
+    /// This test creates two subnets and several leases associated with
+    /// them, then verifies that lease statistics are recalculated correctly
+    /// after altering the lease states in various ways.
+    void testRecountLeaseStats4();
+
+    /// @brief Check that the IPv6 lease statistics can be recounted
+    ///
+    /// This test creates two subnets and several leases associated with
+    /// them, then verifies that lease statistics are recalculated correctly
+    /// after altering the lease states in various ways.
+    void testRecountLeaseStats6();
+
+
+    /// @brief Check if wipeLeases4 works properly.
+    ///
+    /// This test creates a bunch of leases in several subnets and then
+    /// attempts to delete them, one subnet at a time.
+    void testWipeLeases4();
+
+    /// @brief Check if wipeLeases6 works properly.
+    ///
+    /// This test creates a bunch of leases in several subnets and then
+    /// attempts to delete them, one subnet at a time.
+    void testWipeLeases6();
 
     /// @brief String forms of IPv4 addresses
     std::vector<std::string>  straddress4_;

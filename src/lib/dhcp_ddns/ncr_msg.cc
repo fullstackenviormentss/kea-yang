@@ -1,8 +1,10 @@
-// Copyright (C) 2013-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2013-2016 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+#include <config.h>
 
 #include <dhcp_ddns/ncr_msg.h>
 #include <dns/name.h>
@@ -10,6 +12,7 @@
 #include <asiolink/io_error.h>
 #include <cryptolink/cryptolink.h>
 #include <cryptolink/crypto_hash.h>
+#include <util/encode/hex.h>
 
 #include <boost/algorithm/string/predicate.hpp>
 

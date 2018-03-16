@@ -1,13 +1,13 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
-AC_PREREQ([2.59])
+AC_PREREQ([2.69])
 
 # For released versions, this is in x.y.z format.
 # For GIT versions, this is x.y.z-git, where x.y.z denotes the software
 # version that was used as a base + changes that were made later, but
 # are not released yet.
-AC_INIT(kea,1.0.0-git, kea-dev@lists.isc.org)
+AC_INIT(kea,1.3.0-git, kea-dev@lists.isc.org)
 AC_CONFIG_SRCDIR(README)
 
 # serial-tests is not available in automake version before 1.13, so
@@ -27,6 +27,7 @@ AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR([m4macros])
 
 AC_CANONICAL_HOST
+AC_CANONICAL_BUILD
 
 # Checks for programs.
 AC_PROG_CXX
@@ -34,7 +35,7 @@ AC_PROG_CXX
 # Check for exact Kea version.
 AC_MSG_CHECKING(whether this is a tarball or git source)
 if test -d "${srcdir}/.git"; then
-	KEA_SRCID="git `(cd "${top_srcdir}";git rev-parse HEAD)`"
+        KEA_SRCID="git `(cd "${top_srcdir}";git rev-parse HEAD)`"
         AC_MSG_RESULT("git")
 else
         KEA_SRCID="tarball"
@@ -46,17 +47,32 @@ AC_DEFINE_UNQUOTED([EXTENDED_VERSION], ["${KEA_SRCID}"], [Extended Kea version])
 
 # Find a separator for path_replacer
 for sep in "+" "," ";" "&" "__NONE__"; do
-	if `pwd | grep -q $sep`; then continue; fi
-	if `echo ${prefix} | grep -q $sep`; then continue; fi
-	if `echo ${sysconfdir} | grep -q $sep`; then continue; fi
-	if `echo ${localstatedir} | grep -q $sep`; then continue; fi
-	SEP=$sep
-	break
+        if `pwd | grep -q $sep`; then continue; fi
+        if `echo ${prefix} | grep -q $sep`; then continue; fi
+        if `echo ${sysconfdir} | grep -q $sep`; then continue; fi
+        if `echo ${localstatedir} | grep -q $sep`; then continue; fi
+        SEP=$sep
+        break
 done
 if test "$sep" = "__NONE__"; then
-	AC_MSG_ERROR([can't find a separator character in '+,;&' for the path_replacer shell script])
+        AC_MSG_ERROR([can't find a separator character in '+,;&' for the path_replacer shell script])
 fi
 AC_SUBST(SEP)
+
+# If cross compiling assume the message compiler executable was
+# magically already in place...
+if test "$cross_compiling" = "yes"; then
+        AC_MSG_CHECKING("build (vs. host) compiled message compiler")
+	if test -x "${srcdir}/src/lib/log/compiler/message"; then
+		AC_MSG_RESULT(yes)
+	else
+		AC_MSG_RESULT(no)
+		AC_MSG_WARN("you must install a message compiler in:")
+		AC_MSG_WARN("    ${srcdir}/src/lib/log/compiler/message")
+		AC_MSG_WARN("compiled for build ($build).")
+	fi
+fi
+AM_CONDITIONAL([CROSS_COMPILING], [test "$cross_compiling" = "yes"])
 
 # Enable low-performing debugging facilities? This option optionally
 # enables some debugging aids that perform slowly and hence aren't built
@@ -71,6 +87,28 @@ AC_ARG_ENABLE([debug],
   esac],[debug_enabled=no])
 AM_CONDITIONAL([DEBUG_ENABLED], [test x$debug_enabled = xyes])
 AM_COND_IF([DEBUG_ENABLED], [AC_DEFINE([ENABLE_DEBUG], [1], [Enable low-performing debugging facilities?])])
+
+# Include premium configuration
+PREMIUM_DIR=
+DISTCHECK_PREMIUM_CONFIGURE_FLAG=
+AC_DEFUN([AX_PREMIUM],[])
+# m4_sinclude includes the file if it exists at autoreconf time
+m4_sinclude(premium/config.m4)
+m4_sinclude(premium/tier1.m4)
+m4_sinclude(premium/tier2.m4)
+AC_SUBST(PREMIUM_DIR)
+AC_SUBST(DISTCHECK_PREMIUM_CONFIGURE_FLAG)
+AX_PREMIUM
+
+# Include contrib configuration
+# (currently only a provision copied from premium support)
+CONTRIB_DIR=
+DISTCHECK_CONTRIB_CONFIGURE_FLAG=
+AC_DEFUN([AX_CONTRIB],[])
+m4_sinclude(contrib/config.m4)
+AC_SUBST(CONTRIB_DIR)
+AC_SUBST(DISTCHECK_CONTRIB_CONFIGURE_FLAG)
+AX_CONTRIB
 
 # Libtool configuration
 #
@@ -106,8 +144,24 @@ AC_LANG([C++])
 AM_CONDITIONAL(USE_GXX, test "X${GXX}" = "Xyes")
 AC_CHECK_DECL([__SUNPRO_CC], [SUNCXX="yes"], [SUNCXX="no"])
 AC_CHECK_DECL([__clang__], [CLANGPP="yes"], [CLANGPP="no"])
-# USE_CLANGPP is no longer used, keep it by summetry with USE_GXX?
+# USE_CLANGPP is no longer used, keep it by symmetry with USE_GXX?
 AM_CONDITIONAL(USE_CLANGPP, test "X${CLANGPP}" = "Xyes")
+
+# Check for C++11 features support
+AX_ISC_CPP11
+
+# Check for std::is_base_of support
+AC_MSG_CHECKING([for std::is_base_of])
+AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM(
+        [#include <type_traits>
+        class A {};
+        class B : A {};]
+        [static_assert(std::is_base_of<A, B>::value, "");])],
+    [AC_MSG_RESULT(yes)
+    AC_DEFINE([HAVE_IS_BASE_OF], [1],
+    [Define to 1 if std::is_base_of is available])],
+    [AC_MSG_RESULT(no)])
 
 dnl Determine if we are using GNU sed
 GNU_SED=no
@@ -115,6 +169,17 @@ $SED --version 2> /dev/null | grep GNU > /dev/null 2>&1
 if test $? -eq 0; then
   GNU_SED=yes
 fi
+
+# Display the C++ version
+AC_MSG_CHECKING([C++ version])
+cat > conftest.cpp << EOF
+long v = __cplusplus;
+EOF
+CXX_STANDARD=`$CXX $CXXFLAGS -E -o - conftest.cpp | grep '^long v = ' | $SED -e 's/^long v = //' -e 's/[[^0-9]]*$//' 2> /dev/null`
+if test -z "$CXX_STANDARD"; then
+        CXX_STANDARD="unknown"
+fi
+AC_MSG_RESULT([$CXX_STANDARD])
 
 # Linker options
 
@@ -186,34 +251,52 @@ if expr "$CXX_DUMP_VERSION" \< "4.5" > /dev/null; then
        WARNING_GCC_44_STRICT_ALIASING_CFLAG="-fno-strict-aliasing"
 fi
 AC_SUBST(WARNING_GCC_44_STRICT_ALIASING_CFLAG)
+CPPP="$CPP"
+# gcc 5 preprocessor requires -P for checking its output
+if expr "$CXX_DUMP_VERSION" \> "5" > /dev/null; then
+       CPPP="$CPP -P"
+fi
 
 case "$host" in
 *-solaris*)
-	MULTITHREADING_FLAG=-pthreads
-	# In Solaris, IN6ADDR_ANY_INIT and IN6ADDR_LOOPBACK_INIT need -Wno-missing-braces
-	KEA_CXXFLAGS="$KEA_CXXFLAGS -Wno-missing-braces"
-	;;
+        MULTITHREADING_FLAG=-pthreads
+        # In Solaris, IN6ADDR_ANY_INIT and IN6ADDR_LOOPBACK_INIT need -Wno-missing-braces
+        KEA_CXXFLAGS="$KEA_CXXFLAGS -Wno-missing-braces"
+        ;;
 *-apple-darwin*)
-	MULTITHREADING_FLAG=
-	;;
+        MULTITHREADING_FLAG=
+        ;;
 *)
-	MULTITHREADING_FLAG=-pthread
-	;;
+        MULTITHREADING_FLAG=-pthread
+        ;;
 esac
 KEA_CXXFLAGS="$KEA_CXXFLAGS $MULTITHREADING_FLAG"
 
-# Don't use -Werror if configured not to
+# Disable -Werror by default. Only use it if specifically enabled.
+# The usage of this flag is:
+#
+# No flag:            -Werror is disabled
+# --with-werror:      -Werror is enabled
+# --with-werror=yes:  -Werror is enabled
+# --with-werror=no:   -Werror is disabled
+# --with-werror=value -Werror is enabled and "value" is included in the compiler flags
+#
+# In the last case, "value" may be one or more compiler flags, e.g.
+
+# --with-werror=-Wundef
+# --with-werror='-Wundef -Wconversion'
+
 werror_extras=
 AC_ARG_WITH(werror,
-    AC_HELP_STRING([--with-werror], [Compile using -Werror (default=yes)]),
+    AC_HELP_STRING([--with-werror], [Compile using -Werror (default=no)]),
     [
      case "${withval}" in
          yes) with_werror=1 ;;
          no)  with_werror=0 ;;
          -*)  with_werror=1; werror_extras=${withval} ;;
-	 *)   AC_MSG_ERROR(bad value ${withval} for --with-werror) ;;
+         *)   AC_MSG_ERROR(bad value ${withval} for --with-werror) ;;
      esac],
-     [with_werror=1])
+     [with_werror=0])
 
 werror_ok=0
 
@@ -228,10 +311,10 @@ if test $with_werror = 1; then
    # "unused private members", causing a false positive.
    AC_TRY_COMPILE([namespace { struct Foo {}; }
    namespace isc {struct Bar {Foo foo_;};} ],,
-	[AC_MSG_RESULT(no)
-	 werror_ok=1
-	 KEA_CXXFLAGS="$KEA_CXXFLAGS -Werror"],
-	[AC_MSG_RESULT(yes)])
+        [AC_MSG_RESULT(no)
+         werror_ok=1
+         KEA_CXXFLAGS="$KEA_CXXFLAGS -Werror"],
+        [AC_MSG_RESULT(yes)])
    CXXFLAGS="$CXXFLAGS_SAVED"
 fi
 
@@ -242,24 +325,24 @@ fi
 # https://svn.boost.org/trac/boost/ticket/3477
 # But older GCC compilers don't have the flag.
 KEA_CXX_TRY_FLAG([-Wno-missing-field-initializers],
-	[KEA_CXXFLAGS="$KEA_CXXFLAGS -Wno-missing-field-initializers"])
+        [KEA_CXXFLAGS="$KEA_CXXFLAGS -Wno-missing-field-initializers"])
 
 if test "X$CLANGPP" = "Xyes"; then
-	# This is to workaround unused variables tcout and tcerr in
-	# log4cplus's streams.h and unused parameters from some of the
-	# Boost headers.
-	KEA_CXXFLAGS="$KEA_CXXFLAGS -Wno-unused-variable -Wno-unused-parameter"
+        # This is to workaround unused variables tcout and tcerr in
+        # log4cplus's streams.h and unused parameters from some of the
+        # Boost headers.
+        KEA_CXXFLAGS="$KEA_CXXFLAGS -Wno-unused-variable -Wno-unused-parameter"
 fi
 
 # Add the extras at the very last
 # Note it can be used to re-enable a (fatal) warning
 for extra in $werror_extras; do
-	KEA_CXX_TRY_FLAG([$extra],
-		[KEA_CXXFLAGS="$KEA_CXXFLAGS $extra"],
-		[AC_MSG_ERROR([$CXX does not support $extra"])])
+        KEA_CXX_TRY_FLAG([$extra],
+                [KEA_CXXFLAGS="$KEA_CXXFLAGS $extra"],
+                [AC_MSG_ERROR([$CXX does not support $extra"])])
 done
 
-fi				dnl GXX = yes
+fi                              dnl GXX = yes
 
 # allow building programs with static link.  we need to make it selective
 # because loadable modules cannot be statically linked.
@@ -272,10 +355,10 @@ AM_COND_IF([USE_STATIC_LINK], [AC_DEFINE([USE_STATIC_LINK], [1], [Was Kea static
 
 # Check validity about some libtool options
 if test $enable_static_link = yes -a $enable_static = no; then
-	AC_MSG_ERROR([--enable-static-link requires --enable-static])
+        AC_MSG_ERROR([--enable-static-link requires --enable-static])
 fi
 if test $enable_static_link = no -a $enable_shared = no; then
-	AC_MSG_ERROR([--disable-static-link requires --enable-shared])
+        AC_MSG_ERROR([--disable-static-link requires --enable-shared])
 fi
 
 # OS dependent configuration
@@ -283,48 +366,48 @@ kea_undefined_pthread_behavior=no
 
 case "$host" in
 *-solaris*)
-	# Solaris requires special definitions to get some standard libraries
-	# (e.g. getopt(3)) available with common used header files.
-	CPPFLAGS="$CPPFLAGS -D_XPG4_2 -D__EXTENSIONS__"
-	# "now" binding is necessary to prevent deadlocks in C++ static initialization code
-	LDFLAGS="$LDFLAGS -z now"
-	# Destroying locked mutexes, condition variables being waited
-	# on, etc. are undefined behavior on Solaris, so we set it as
-	# such here.
-	kea_undefined_pthread_behavior=yes
-	;;
+        # Solaris requires special definitions to get some standard libraries
+        # (e.g. getopt(3)) available with common used header files.
+        CPPFLAGS="$CPPFLAGS -D_XPG4_2 -D__EXTENSIONS__"
+        # "now" binding is necessary to prevent deadlocks in C++ static initialization code
+        LDFLAGS="$LDFLAGS -z now"
+        # Destroying locked mutexes, condition variables being waited
+        # on, etc. are undefined behavior on Solaris, so we set it as
+        # such here.
+        kea_undefined_pthread_behavior=yes
+        ;;
 *-apple-darwin*)
-	# Starting with OSX 10.7 (Lion) we must choose which IPv6 API to use
-	# (RFC2292 or RFC3542).
-	CPPFLAGS="$CPPFLAGS -D__APPLE_USE_RFC_3542"
+        # Starting with OSX 10.7 (Lion) we must choose which IPv6 API to use
+        # (RFC2292 or RFC3542).
+        CPPFLAGS="$CPPFLAGS -D__APPLE_USE_RFC_3542"
 
-	# In OS X 10.9 (and possibly any future versions?) pthread_cond_destroy
-	# doesn't work as documented, which makes some of unit tests fail.
-	AC_MSG_CHECKING([OS X versions where destroying locked locks do not fail])
-	AC_TRY_COMPILE(
-	[#include <Availability.h>],
-	[#ifdef __MAC_OS_X_VERSION_MIN_REQUIRED
-	 #if __MAC_OS_X_VERSION_MIN_REQUIRED >= 1090
-	 #error " OS X >= 10.9"
-	 #endif
-	 #endif
-	 return 1;],
-	[AC_MSG_RESULT([OS X < 10.9])],
-	[AC_MSG_RESULT([OS X >= 10.9])
-	 kea_undefined_pthread_behavior=yes])
-	;;
+        # In OS X 10.9 (and possibly any future versions?) pthread_cond_destroy
+        # doesn't work as documented, which makes some of unit tests fail.
+        AC_MSG_CHECKING([OS X versions where destroying locked locks do not fail])
+        AC_TRY_COMPILE(
+        [#include <Availability.h>],
+        [#ifdef __MAC_OS_X_VERSION_MIN_REQUIRED
+         #if __MAC_OS_X_VERSION_MIN_REQUIRED >= 1090
+         #error " OS X >= 10.9"
+         #endif
+         #endif
+         return 1;],
+        [AC_MSG_RESULT([OS X < 10.9])],
+        [AC_MSG_RESULT([OS X >= 10.9])
+         kea_undefined_pthread_behavior=yes])
+        ;;
 *-freebsd*)
-	# On FreeBSD10.1 pthread_cond_destroy doesn't work as documented, which
-	# causes the CondVarTest.destroyWhileWait test to fail. According to the
-	# pthread_cond_destroy documentation for FreeBSD, this function should
-	# return EBUSY error when there is a thread waiting for the conditional
-	# variable, whereas this function returned success code. We treat it here
-	# as an undefined behavior. Also note that this issue was only visible
-	# when gtest 1.7 was in use, because the previous versions of gtest
-	# didn't seem to have support for the death tests on FreeBSD. As a
-	# result, the test was not executed and the error didn't occur.
-	kea_undefined_pthread_behavior=yes
-	;;
+        # On FreeBSD10.1 pthread_cond_destroy doesn't work as documented, which
+        # causes the CondVarTest.destroyWhileWait test to fail. According to the
+        # pthread_cond_destroy documentation for FreeBSD, this function should
+        # return EBUSY error when there is a thread waiting for the conditional
+        # variable, whereas this function returned success code. We treat it here
+        # as an undefined behavior. Also note that this issue was only visible
+        # when gtest 1.7 was in use, because the previous versions of gtest
+        # didn't seem to have support for the death tests on FreeBSD. As a
+        # result, the test was not executed and the error didn't occur.
+        kea_undefined_pthread_behavior=yes
+        ;;
 esac
 if [ test $kea_undefined_pthread_behavior = "yes" ]; then
    AC_DEFINE([HAS_UNDEFINED_PTHREAD_BEHAVIOR], [1], [Does this platform have some undefined pthreads behavior?])
@@ -340,47 +423,67 @@ fi
 # of that version of Solaris.
 case "$host" in
 *-solaris2.10)
-	AC_DEFINE([HAVE_BROKEN_GET_IPV6_USE_MIN_MTU], [1],
-	[Define to 1 if getsockopt(IPV6_USE_MIN_MTU) does not work])
-	;;
+        AC_DEFINE([HAVE_BROKEN_GET_IPV6_USE_MIN_MTU], [1],
+        [Define to 1 if getsockopt(IPV6_USE_MIN_MTU) does not work])
+        ;;
 esac
 
-m4_define([_AM_PYTHON_INTERPRETER_LIST], [python python3.4 python3.3 python3.2 python3.1 python3])
-AC_ARG_WITH([pythonpath],
-AC_HELP_STRING([--with-pythonpath=PATH],
-  [specify an absolute path to python executable when automatic version check (incorrectly) fails]),
-  [python_path="$withval"], [python_path="auto"])
-if test "$python_path" = auto; then
-	AM_PATH_PYTHON([3.1],,[PYTHON=no])
+# Kea-shell is written in python. It can work with python 2.7 or any 3.x.
+# It may likely work with earlier versions, but 2.7 was the oldest one we tested
+# it with. We require python only if kea-shell was enabled. It is disabled
+# by default to not introduce hard dependency on python.
+AC_ARG_ENABLE(shell, [AC_HELP_STRING([--enable-shell],
+  [enable kea-shell, a text management client for Control Agent [default=no]])],
+  enable_shell=$enableval, enable_shell=no)
+
+DISTCHECK_KEA_SHELL_CONFIGURE_FLAG=
+PKGPYTHONDIR=
+m4_define_default([_AM_PYTHON_INTERPRETER_LIST],
+ [python3 python3.9 python3.8 python3.7 python3.6 python3.5 python3.4 dnl
+  python3.3 python3.2 python3.1 python3.0 python python2 python2.7])
+if test "x$enable_shell" != xno ; then
+# If kea-shell is enabled, we really need python. 2.7 or anything newer will do.
+# We try to find 3.x first. If not found, we can do with 2.7.
+  AM_PATH_PYTHON([2.7])
+  # pkgpythondir needs to be expanded
+  saved_prefix="$prefix"
+  if test "$prefix" = "NONE"; then
+    prefix=$ac_default_prefix
+  fi
+  PKGPYTHONDIR="$pkgpythondir"
+  OLD=
+  while test "x$OLD" != "x$PKGPYTHONDIR"; do
+    OLD="$PKGPYTHONDIR"
+    eval PKGPYTHONDIR="\"$OLD\""
+  done
+  prefix="$saved_prefix"
+  DISTCHECK_KEA_SHELL_CONFIGURE_FLAG="--enable-shell"
 else
-	# Older versions of automake can't handle python3 well.  This is an
-	# in-house workaround for them.
-	PYTHON=$python_path
-	AC_SUBST(PYTHON)
-	PYTHON_PREFIX='${prefix}'
-	AC_SUBST(PYTHON_PREFIX)
-	PYTHON_EXEC_PREFIX='$(exec_prefix)'
-	AC_SUBST(PYTHON_EXEC_PREFIX)
-	PYTHON_VERSION=[`$PYTHON -c "import sys; sys.stdout.write(sys.version[:3])"`]
-	if test `echo "$PYTHON_VERSION >= 3.1" | bc` != 1 ; then
-		AC_MSG_ERROR(["Python version too old: $PYTHON_VERSION, need 3.1 or higher"])
-	fi
-	AC_SUBST(PYTHON_VERSION)
-	PYTHON_PLATFORM=`$PYTHON -c "import sys; print(sys.platform)"`
-	AC_SUBST(PYTHON_PLATFORM)
-	pythondir='${prefix}/lib/python'$PYTHON_VERSION'/site-packages'
-	AC_SUBST(pythondir)
-	pkgpythondir='${pythondir}/'$PACKAGE
-	AC_SUBST(pkgpythondir)
-	pyexecdir='${exec_prefix}/lib/python'$PYTHON_VERSION'/site-packages'
-	AC_SUBST(pyexecdir)
-	pkgpyexecdir='${pyexecdir}/'$PACKAGE
-	AC_SUBST(pkgpyexecdir)
+  PYTHON=no
 fi
+
+# Export to makefiles the info whether we have shell enabled or not
+AM_CONDITIONAL(KEA_SHELL, test x$enable_shell != xno)
+AC_SUBST(DISTCHECK_KEA_SHELL_CONFIGURE_FLAG)
+AC_SUBST(PKGPYTHONDIR)
 
 # produce PIC unless we disable shared libraries. need this for python bindings.
 if test $enable_shared != "no" -a "X$GXX" = "Xyes"; then
    KEA_CXXFLAGS="$KEA_CXXFLAGS -fPIC"
+fi
+
+# Look for glib static libs if they're trying to do static builds
+if test $enable_static_link != "no"; then
+   CXX_SAVED=$CXX
+   CXX="$CXX -static"
+
+   AC_LINK_IFELSE(
+     [AC_LANG_PROGRAM([#include <math.h>],[(void)sqrt(-1.0);])],
+     [AC_MSG_RESULT([checking for static glib libraries... yes])],
+     [AC_MSG_RESULT([checking for static glib libraries... no])
+      AC_MSG_ERROR([Building with --enable-static-link does not work. You appear to be missing glib static libraries. Check config.log for details.])])
+
+   CXX=$CXX_SAVED
 fi
 
 AC_SUBST(KEA_CXXFLAGS)
@@ -477,439 +580,69 @@ AC_ARG_WITH([gtest-source],
             [enable_gtest="yes" ; GTEST_SOURCE="$withval"])
 
 AC_ARG_WITH([gtest],
-	    [AS_HELP_STRING([--with-gtest=PATH],
-			    [specify a path to gtest header files (PATH/include) and library (PATH/lib)])],
-	[gtest_path="$withval"; enable_gtest="yes"], [gtest_path="no"])
+            [AS_HELP_STRING([--with-gtest=PATH],
+                            [specify a path to gtest header files (PATH/include) and library (PATH/lib)])],
+        [gtest_path="$withval"; enable_gtest="yes"], [gtest_path="no"])
 
 AC_ARG_WITH(lcov,
 [  --with-lcov[=PROGRAM]         enable gtest and coverage target using the specified lcov], lcov="$withval", lcov="no")
 
 USE_LCOV="no"
 if test "$lcov" != "no"; then
-	# force gtest if not set
-	if test "$enable_gtest" = "no"; then
-#		AC_MSG_ERROR("lcov needs gtest for test coverage report")
-		AC_MSG_NOTICE([gtest support is now enabled, because used by coverage tests])
-		enable_gtest="yes"
-	fi
-	if test "$lcov" != "yes"; then
-		LCOV=$lcov
-	else
-		AC_PATH_PROG([LCOV], [lcov])
-	fi
-	if test -x "${LCOV}"; then
-		USE_LCOV="yes"
-	else
-		AC_MSG_ERROR([Cannot find lcov.])
-	fi
-	# is genhtml always in the same directory?
-	GENHTML=`echo "$LCOV" | ${SED} s/lcov$/genhtml/`
-	if test ! -x $GENHTML; then
-		AC_MSG_ERROR([genhtml not found, needed for lcov])
-	fi
-	# GCC specific?
-	CXXFLAGS="$CXXFLAGS -fprofile-arcs -ftest-coverage"
-	LIBS=" $LIBS -lgcov"
-	AC_SUBST(CPPFLAGS)
-	AC_SUBST(LIBS)
-	AC_SUBST(LCOV)
-	AC_SUBST(GENHTML)
+        # force gtest if not set
+        if test "$enable_gtest" = "no"; then
+#               AC_MSG_ERROR("lcov needs gtest for test coverage report")
+                AC_MSG_NOTICE([gtest support is now enabled, because used by coverage tests])
+                enable_gtest="yes"
+        fi
+        if test "$lcov" != "yes"; then
+                LCOV=$lcov
+        else
+                AC_PATH_PROG([LCOV], [lcov])
+        fi
+        if test -x "${LCOV}"; then
+                USE_LCOV="yes"
+        else
+                AC_MSG_ERROR([Cannot find lcov.])
+        fi
+        # is genhtml always in the same directory?
+        GENHTML=`echo "$LCOV" | ${SED} s/lcov$/genhtml/`
+        if test ! -x $GENHTML; then
+                AC_MSG_ERROR([genhtml not found, needed for lcov])
+        fi
+        # GCC specific?
+        CXXFLAGS="$CXXFLAGS -fprofile-arcs -ftest-coverage"
+        LIBS=" $LIBS -lgcov"
+        AC_SUBST(CPPFLAGS)
+        AC_SUBST(LIBS)
+        AC_SUBST(LCOV)
+        AC_SUBST(GENHTML)
 fi
 AC_SUBST(USE_LCOV)
 
-# Simplified, non-caching AC_CHECK_PROG
-# Searches $PATH for the existence of argument 2,
-# and sets the full path to the variable in argument 1.
-# if not found, and a third argument is given, the value
-# is set to that. If not, the value is untouched.
-# Does not take absolute paths into account at this point,
-# and also works for single files only (arguments are not
-# stripped like in AC_CHECK_PROG)
-AC_DEFUN([ACX_CHECK_PROG_NONCACHE], [
-    RESULT=""
-    IFS_SAVED="$IFS"
-    IFS=${PATH_SEPARATOR}
-    for cur_path in ${PATH} ; do
-      if test -e "${cur_path}/$2" ; then
-          RESULT="${cur_path}/$2"
-      fi
-    done
-    if test "$RESULT" = "" ; then
-        :
-        m4_ifvaln([$3], [$1=$3])
-    else
-        $1=$RESULT
-    fi
-    IFS="$IFS_SAVED"
-])
+enable_benchmark="no"
+BENCHMARK_INCLUDES=
 
-# Avoid checking Botan if OpenSSL is wanted
-AC_ARG_WITH([openssl],
-            [AS_HELP_STRING([--with-openssl[[=PATH]]], [Enables OpenSSL,
-            location can be specified optionally])],
-            [use_openssl="$withval"],
-            [use_openssl="auto"])
+AC_ARG_WITH([benchmark-source],
+            [AS_HELP_STRING([--with-benchmark-source=PATH],
+                            [location of the benchmark source])],
+            [enable_benchmark="yes" ; BENCHMARK_SOURCE="$withval"])
 
-# Botan helper test function
-# Tries to compile a botan program, given the output of the given
-# config tool
-# Arguments:
-# - name of tool (checked for path), must support --libs and --cflags
-# - fixed argument(s) for tool
-# - action if successful
-AC_DEFUN([ACX_TRY_BOTAN_TOOL], [
-    TOOL=$1
-    TOOL_ARG=$2
-    BOTAN_TOOL=""
-    ACX_CHECK_PROG_NONCACHE([BOTAN_TOOL], [${TOOL}])
-    AC_MSG_CHECKING([usability of ${TOOL} ${TOOL_ARG}])
-    if test "$BOTAN_TOOL" != "" ; then
-        if test -x ${BOTAN_TOOL}; then
-            CRYPTO_LIBS=`$BOTAN_TOOL $TOOL_ARG --libs`
-            LIBS_SAVED=${LIBS}
-            LIBS="$LIBS $CRYPTO_LIBS"
-            CRYPTO_INCLUDES=`$BOTAN_TOOL $TOOL_ARG --cflags`
-            CPPFLAGS_SAVED=${CPPFLAGS}
-            CPPFLAGS="$CRYPTO_INCLUDES $CPPFLAGS"
-            #AC_MSG_RESULT([found])
-            AC_LINK_IFELSE(
-                [AC_LANG_PROGRAM([#include <botan/botan.h>
-                                  #include <botan/hash.h>
-                                 ],
-                                 [using namespace Botan;
-                                  LibraryInitializer::initialize();
-                                  HashFunction *h = get_hash("MD5");
-                                 ])],
-                [ AC_MSG_RESULT([ok])
-                  $3
-                ],
-                [ AC_MSG_RESULT([not usable]) ]
-            )
-            LIBS=${LIBS_SAVED}
-            CPPFLAGS=${CPPFLAGS_SAVED}
-        else
-            AC_MSG_RESULT([not executable])
-        fi
-    else
-        AC_MSG_RESULT([not found])
-    fi
-    BOTAN_TOOL=""
-    AC_SUBST(BOTAN_TOOL)
-    ]
-)
+AC_ARG_WITH([benchmark],
+            [AS_HELP_STRING([--with-benchmark=PATH],
+                            [specify a path to benchmark header files (PATH/include) and library (PATH/lib)])],
+        [benchmark_path="$withval"; enable_benchmark="yes"], [benchmark_path="no"])
 
-# Check for Botan
-#
-# Unless --with-botan-config is given, we first try to find these config
-# scripts ourselves. Unfortunately, on some systems, these scripts do not
-# provide the correct implementation, so for each script found, we try
-# a compilation test (ACX_TRY_BOTAN_TOOL). If none are found, or none of
-# them work, we see if pkg-config is available. If so, we try the several
-# potential pkg-config .pc files. Again, on some systems, these can return
-# incorrect information as well, so the try-compile test is repeated for
-# each.
-#
-# If a working config script or pkgconfig file is found, we then munge its
-# output for use in our Makefiles, and to make sure it works, another header
-# and compilation test is done (this should also check whether we can compile
-# against botan should neither -config scripts nor pkgconfig data exist).
-#
-botan_config="yes"
-if test "${use_openssl}" != "auto" -a "${use_openssl}" != "no" ; then
-   botan_config="no"
-fi
-AC_ARG_WITH([botan-config],
-  AC_HELP_STRING([--with-botan-config=PATH],
-    [specify the path to the botan-config script]),
-    [botan_config="$withval"])
-distcheck_botan="--with-botan-config=$botan_config"
-if test "${botan_config}" = "no" ; then
-    if test "${use_openssl}" = "no" ; then
-       AC_MSG_ERROR([Need Botan or OpenSSL for libcryptolink])
-    fi
-elif test "${botan_config}" != "yes" ; then
-    if test -x "${botan_config}" ; then
-        if test -d "${botan_config}" ; then
-            AC_MSG_ERROR([${botan_config} is a directory])
-        else
-            BOTAN_CONFIG="${botan_config}"
-        fi
-    else
-        AC_MSG_ERROR([--with-botan-config should point to a botan-config program and not a directory (${botan_config})])
-    fi
-else
-    BOTAN_CONFIG=""
-    # first try several possible names of the config script
-    # (botan-config-1.8 is there just in case, the official name change
-    # came later)
-    BOTAN_CONFIG_VERSIONS="botan-config-1.10 botan-config-1.9 botan-config-1.8 botan-config"
-    for botan_config in $BOTAN_CONFIG_VERSIONS; do
-        ACX_TRY_BOTAN_TOOL([$botan_config],,
-                           [ BOTAN_CONFIG="$botan_config"  ]
-                          )
-        if test "$BOTAN_CONFIG" != "" ; then
-            break
-        fi
-    done
-    if test "$BOTAN_CONFIG" = "" ; then
-        AC_PATH_PROG([PKG_CONFIG], [pkg-config])
-        if test "$PKG_CONFIG" != "" ; then
-            # Ok so no script found, see if pkg-config knows of it.
-            # Unfortunately, the botan.pc files also have their minor version
-            # in their name, so we need to try them one by one
-            BOTAN_VERSIONS="botan-1.10 botan-1.9 botan-1.8"
-            for version in $BOTAN_VERSIONS; do
-                ACX_TRY_BOTAN_TOOL([pkg-config], ["$version --silence-errors"],
-                                   [ BOTAN_CONFIG="$PKG_CONFIG $version" ]
-                                  )
-            if test "$BOTAN_CONFIG" != "" ; then
-                break
-            fi
-            done
-        fi
-    fi
-fi
-
-if test "x${BOTAN_CONFIG}" != "x"
-then
-    CRYPTO_LIBS=`${BOTAN_CONFIG} --libs`
-    CRYPTO_INCLUDES=`${BOTAN_CONFIG} --cflags`
-
-    # We expect botan-config --libs to contain -L<path_to_libbotan>, but
-    # this is not always the case.  As a heuristics workaround we add
-    # -L`botan-config --prefix/lib` in this case (if not present already).
-    # Same for CRYPTO_INCLUDES (but using include instead of lib) below.
-    if [ ${BOTAN_CONFIG} --prefix >/dev/null 2>&1 ] ; then
-        echo ${CRYPTO_LIBS} | grep -- -L > /dev/null || \
-            CRYPTO_LIBS="-L`${BOTAN_CONFIG} --prefix`/lib ${CRYPTO_LIBS}"
-        echo ${CRYPTO_INCLUDES} | grep -- -I > /dev/null || \
-            CRYPTO_INCLUDES="-I`${BOTAN_CONFIG} --prefix`/include ${CRYPTO_INCLUDES}"
-    fi
-fi
-
-if test "x${CRYPTO_LIBS}" != "x"
-then
-   dnl Determine the Botan version
-   AC_MSG_CHECKING([Botan version])
-   cat > conftest.cpp << EOF
-#include <botan/version.h>
-AUTOCONF_BOTAN_VERSION=BOTAN_VERSION_MAJOR . BOTAN_VERSION_MINOR . BOTAN_VERSION_PATCH
-EOF
-
-   CRYPTO_VERSION=`$CPP $CPPFLAGS $CRYPTO_INCLUDES conftest.cpp | grep '^AUTOCONF_BOTAN_VERSION=' | $SED -e 's/^AUTOCONF_BOTAN_VERSION=//' -e 's/[[ 	]]//g' -e 's/"//g' 2> /dev/null`
-   if test -z "$CRYPTO_VERSION"; then
-      CRYPTO_VERSION="unknown"
-   fi
-   $RM -f conftest.cpp
-   AC_MSG_RESULT([$CRYPTO_VERSION])
-
-   # botan-config script (and the way we call pkg-config) returns -L and -l
-   # as one string, but we need them in separate values
-   CRYPTO_LDFLAGS=
-   for flag in ${CRYPTO_LIBS}; do
-       CRYPTO_LDFLAGS="${CRYPTO_LDFLAGS} `echo $flag | ${SED} -ne '/^\(\-L\)/p'`"
-       CRYPTO_LIBS="${CRYPTO_LIBS} `echo $flag | ${SED} -ne '/^\(\-l\)/p'`"
-   done
-
-   # See crypto_rpath for some info on why we do this
-   if test "x$ISC_RPATH_FLAG" != "x"; then
-       CRYPTO_RPATH=
-       for flag in ${CRYPTO_LIBS}; do
-               CRYPTO_RPATH="${CRYPTO_RPATH} `echo $flag | ${SED} -ne "s/^\(\-L\)/${ISC_RPATH_FLAG}/p"`"
-       done
-   # According to the libtool manual, it should be sufficient if we
-   # specify the "-R libdir" in our wrapper library of botan (no other
-   # programs will need libbotan directly); "libdir" should be added to
-   # the program's binary image.  But we've seen in our build environments
-   # that (some versions of?) libtool doesn't propagate -R as documented,
-   # and it caused a linker error at run time.  To work around this, we
-   # also add the rpath to the global LDFLAGS.
-       LDFLAGS="$CRYPTO_RPATH $LDFLAGS"
-   fi
-
-   # Even though chances are high we already performed a real compilation check
-   # in the search for the right (pkg)config data, we try again here, to
-   # be sure.
-   CPPFLAGS_SAVED=$CPPFLAGS
-   CPPFLAGS="$CRYPTO_INCLUDES $CPPFLAGS"
-   LIBS_SAVED="$LIBS"
-   LIBS="$LIBS $CRYPTO_LIBS"
-
-   # ac_header_preproc is an autoconf symbol (undocumented but stable) that
-   # is set if the pre-processor phase passes. Thus by adding a custom
-   # failure handler we can detect the difference between a header not existing
-   # (or not even passing the pre-processor phase) and a header file resulting
-   # in compilation failures.
-   AC_CHECK_HEADERS([botan/botan.h],,[
-        CRYPTO_INCLUDES=""
-        CRYPTO_LIBS=""
-        CRYPTO_LDFLAGS=""
-        CRYPTO_RPATH=""
-	if test "x$ac_header_preproc" = "xyes"; then
-		AC_MSG_RESULT([
-botan/botan.h was found but is unusable. The most common cause of this problem
-is attempting to use an updated C++ compiler with older C++ libraries, such as
-the version of Botan that comes with your distribution. If you have updated
-your C++ compiler we highly recommend that you use support libraries such as
-Boost and Botan that were compiled with the same compiler version.])
-	else
-		AC_MSG_RESULT([Missing required header files.])
-	fi]
-   )
-   CPPFLAGS=$CPPFLAGS_SAVED
-   LIBS=$LIBS_SAVED
-fi
-
-if test "x${CRYPTO_LIBS}" != "x"
-then
-   CPPFLAGS_SAVED=$CPPFLAGS
-   CPPFLAGS="$CRYPTO_INCLUDES $CPPFLAGS"
-   LIBS_SAVED="$LIBS"
-   LIBS="$LIBS $CRYPTO_LIBS"
-   AC_LINK_IFELSE(
-        [AC_LANG_PROGRAM([#include <botan/botan.h>
-                          #include <botan/hash.h>
-                         ],
-                         [using namespace Botan;
-                          LibraryInitializer::initialize();
-                          HashFunction *h = get_hash("MD5");
-                         ])],
-        [AC_MSG_RESULT([checking for Botan library... yes])],
-        [AC_MSG_RESULT([checking for Botan library... no])
-         CRYPTO_INCLUDES=""
-         CRYPTO_LIBS=""
-         CRYPTO_LDFLAGS=""
-         CRYPTO_RPATH=""
-         AC_MSG_RESULT([Needs Botan library 1.8 or higher. On some systems,
-         the botan package has a few missing dependencies (libbz2 and
-         libgmp), if libbotan has been installed and you see this message,
-         try upgrading to a higher version of botan or installing libbz2
-         and libgmp.])]
-   )
-   CPPFLAGS=$CPPFLAGS_SAVED
-   LIBS=$LIBS_SAVED
-fi
-
-if test "x${CRYPTO_LIBS}" != "x"
-then
-   CRYPTO_NAME="Botan"
-   DISABLED_CRYPTO="OpenSSL"
-   CRYPTO_PACKAGE="botan-1.8"
-   CRYPTO_CFLAGS=""
-   DISTCHECK_CRYPTO_CONFIGURE_FLAG="$distcheck_botan"
-   AC_DEFINE_UNQUOTED([WITH_BOTAN], [], [Compile with Botan crypto])
-else
-   CRYPTO_NAME="OpenSSL"
-   DISABLED_CRYPTO="Botan"
-   CRYPTO_PACKAGE="openssl-1.0.0"
-   AC_DEFINE_UNQUOTED([WITH_OPENSSL], [], [Compile with OpenSSL crypto])
-   AC_MSG_CHECKING(for OpenSSL library)
-   # from bind9
-
-   if test "${use_openssl}" = "auto" ; then
-      use_openssl="yes"
-   fi
-   if test "${use_openssl}" = "yes" ; then
-      for d in /usr /usr/local /usr/local/ssl /usr/pkg /usr/sfw; do
-          if test -f $d/include/openssl/opensslv.h; then
-             use_openssl=$d; break
-          fi
-      done
-   fi
-   if test "${use_openssl}" = "yes" ; then
-      AC_MSG_ERROR([OpenSSL auto detection failed])
-   fi
-   if ! test -f "${use_openssl}"/include/openssl/opensslv.h ; then
-      AC_MSG_ERROR([OpenSSL not found at ${use_openssl}])
-   fi
-   AC_MSG_RESULT(yes)
-   if test "${use_openssl}" = "/usr" ; then
-      CRYPTO_INCLUDES=""
-      CRYPTO_LIBS="-lcrypto"
-      DISTCHECK_CRYPTO_CONFIGURE_FLAG="--with-openssl"
-      case "$host" in
-          *-apple-darwin*)
-              # Starting with OSX 10.7 (Lion) OpenSSL is deprecated
-              CRYPTO_CFLAGS="-Wno-deprecated-declarations"
-              ;;
-          *)
-              CRYPTO_CFLAGS=""
-              ;;
-      esac
-   else
-      CRYPTO_CFLAGS=""
-      CRYPTO_INCLUDES="-I${use_openssl}/include"
-      DISTCHECK_CRYPTO_CONFIGURE_FLAG="--with-openssl=${use_openssl}"
-      case $host in
-          *-solaris*)
-              CRYPTO_LIBS="-L${use_openssl}/lib -R${use_openssl}/lib -lcrypto"
-              ;;
-          *-hp-hpux*)
-              CRYPTO_LIBS="-L${use_openssl}/lib -Wl,+b: -lcrypto"
-              ;;
-          *-apple-darwin*)
-              if test -f "${use_openssl}/lib/libcrypto.dylib" ; then
-                 CRYPTO_LIBS="-L${use_openssl}/lib -lcrypto"
-              else
-                 CRYPTO_LIBS="${use_openssl}/lib/libcrypto.a"
-              fi
-              ;;
-          *)
-              CRYPTO_LIBS="-L${use_openssl}/lib -lcrypto"
-              ;;
-      esac
-    fi
-    dnl Determine the OpenSSL version
-    AC_MSG_CHECKING([OpenSSL version])
-    cat > conftest.cpp << EOF
-#include <openssl/opensslv.h>
-AUTOCONF_OPENSSL_VERSION=OPENSSL_VERSION_TEXT
-EOF
-
-    CRYPTO_VERSION=`$CPP $CPPFLAGS $CRYPTO_INCLUDES conftest.cpp | grep '^AUTOCONF_OPENSSL_VERSION=' | $SED -e 's/^AUTOCONF_OPENSSL_VERSION=//' -e 's/"//g' 2> /dev/null`
-    if test -z "$CRYPTO_VERSION" ; then
-       CRYPTO_VERSION="unknown"
-    fi
-    $RM -f conftest.cpp
-    AC_MSG_RESULT([$CRYPTO_VERSION])
-    #CRYPTO_LDFLAGS="-ldl"
-    CRYPTO_LDFLAGS=""
-    CRYPTO_RPATH=""
-    dnl Check avaibility of SHA-2
-    AC_MSG_CHECKING([support of SHA-2])
-    LIBS_SAVED=${LIBS}
-    LIBS="$LIBS $CRYPTO_LIBS"
-    CPPFLAGS_SAVED=${CPPFLAGS}
-    CPPFLAGS="$CRYPTO_INCLUDES $CPPFLAGS"
-    AC_LINK_IFELSE(
-        [AC_LANG_PROGRAM([#include <openssl/evp.h>],
-                         [const EVP_MD* h224 = EVP_sha224();
-                          const EVP_MD* h256 = EVP_sha256();
-                          const EVP_MD* h384 = EVP_sha384();
-                          const EVP_MD* h512 = EVP_sha512();
-                          ])],
-        [AC_MSG_RESULT([yes])],
-        [AC_MSG_ERROR([missing EVP entry for SHA-2])])
-    LIBS=${LIBS_SAVED}
-    CPPFLAGS=${CPPFLAGS_SAVED}
-fi
-
-AM_CONDITIONAL(HAVE_BOTAN, test "$CRYPTO_NAME" = "Botan")
-AM_CONDITIONAL(HAVE_OPENSSL, test "$CRYPTO_NAME" = "OpenSSL")
-AC_SUBST(CRYPTO_INCLUDES)
-AC_SUBST(CRYPTO_CFLAGS)
-AC_SUBST(CRYPTO_LIBS)
-AC_SUBST(CRYPTO_LDFLAGS)
-AC_SUBST(CRYPTO_PACKAGE)
-AC_SUBST(CRYPTO_RPATH)
-AC_SUBST(DISTCHECK_CRYPTO_CONFIGURE_FLAG)
+# Sets up for use of botan unless openssl is specified
+# sets variables CRYPTO_*
+AX_CRYPTO
 
 # Check for MySql.  The path to the mysql_config program is given with
 # the --with-mysql-config (default to /usr/bin/mysql-config).  By default,
 # the software is not built with MySQL support enabled.
 mysql_config="no"
-AC_ARG_WITH([dhcp-mysql],
-  AC_HELP_STRING([--with-dhcp-mysql=PATH],
+AC_ARG_WITH([mysql],
+  AC_HELP_STRING([--with-mysql=PATH],
     [path to the MySQL 'mysql_config' script (MySQL is used for the DHCP database)]),
     [mysql_config="$withval"])
 
@@ -921,7 +654,7 @@ fi
 
 if test "$MYSQL_CONFIG" != "" ; then
     if test -d "$MYSQL_CONFIG" -o ! -x "$MYSQL_CONFIG" ; then
-        AC_MSG_ERROR([--with-dhcp-mysql should point to a mysql_config program])
+        AC_MSG_ERROR([--with-mysql should point to a mysql_config program])
     fi
 
     MYSQL_CPPFLAGS=`$MYSQL_CONFIG --cflags`
@@ -962,8 +695,8 @@ AC_CHECK_HEADERS(sys/filio.h,,,)
 AM_CONDITIONAL(HAVE_MYSQL, test "$MYSQL_CONFIG" != "")
 
 pg_config="no"
-AC_ARG_WITH([dhcp-pgsql],
-  AC_HELP_STRING([--with-dhcp-pgsql=PATH],
+AC_ARG_WITH([pgsql],
+  AC_HELP_STRING([--with-pgsql=PATH],
     [path to the PostgreSQL 'pg_config' script]),
     [pg_config="$withval"])
 
@@ -975,7 +708,7 @@ fi
 
 if test "$PG_CONFIG" != "" ; then
     if test -d "$PG_CONFIG" -o ! -x "$PG_CONFIG" ; then
-        AC_MSG_ERROR([--with-dhcp-pgsql should point to a pg_config program])
+        AC_MSG_ERROR([--with-pgsql should point to a pg_config program])
     fi
 
     PGSQL_CPPFLAGS=`$PG_CONFIG --cppflags`
@@ -1025,9 +758,9 @@ AC_ARG_WITH([cql],
     [cql_config="$withval"])
 
 if test "${cql_config}" = "yes" ; then
-    cql_config="/usr/bin/cql_config"
+    CQL_CONFIG="/usr/bin/cql_config"
 elif test "${cql_config}" != "no" ; then
-    CQL_CONFIG="${withval}"
+    CQL_CONFIG="${cql_config}"
 fi
 
 if test "$CQL_CONFIG" != "" ; then
@@ -1037,7 +770,7 @@ if test "$CQL_CONFIG" != "" ; then
 
     CQL_INCLUDEDIR=`$CQL_CONFIG --includedir`
     CQL_CPPFLAGS="`$CQL_CONFIG --cppflags` -I$CQL_INCLUDEDIR"
-    CQL_LIBS="-L`$CQL_CONFIG --libdir` -lcassandra_static -luv"
+    CQL_LIBS="-L`$CQL_CONFIG --libdir` -lcassandra -luv"
     CQL_VERSION=`$CQL_CONFIG --version`
 
     AC_SUBST(CQL_CPPFLAGS)
@@ -1069,6 +802,7 @@ fi
 AM_CONDITIONAL(HAVE_CQL, test "$CQL_CONFIG" != "")
 
 # Check for log4cplus
+DISTCHECK_LOG4CPLUS_CONFIGURE_FLAG=
 log4cplus_path="yes"
 AC_ARG_WITH([log4cplus],
   AC_HELP_STRING([--with-log4cplus=PATH],
@@ -1077,23 +811,26 @@ AC_ARG_WITH([log4cplus],
 if test "${log4cplus_path}" = "no" ; then
     AC_MSG_ERROR([Need log4cplus])
 elif test "${log4cplus_path}" != "yes" ; then
+  DISTCHECK_LOG4CPLUS_CONFIGURE_FLAG="-with-log4cplus=${log4cplus_path}"
   LOG4CPLUS_INCLUDES="-I${log4cplus_path}/include"
   LOG4CPLUS_LIBS="-L${log4cplus_path}/lib"
 else
 # If not specified, try some common paths.
-	log4cplusdirs="/usr/local /usr/pkg /opt /opt/local"
-	for d in $log4cplusdirs
-	do
-		if test -f $d/include/log4cplus/logger.h; then
-			LOG4CPLUS_INCLUDES="-I$d/include"
-			LOG4CPLUS_LIBS="-L$d/lib"
-			break
-		fi
-	done
+        log4cplusdirs="/usr /usr/local /usr/pkg /opt /opt/local"
+        for d in $log4cplusdirs
+        do
+                if test -f $d/include/log4cplus/logger.h; then
+                        LOG4CPLUS_INCLUDES="-I$d/include"
+                        LOG4CPLUS_LIBS="-L$d/lib -L$d/lib64"
+                        break
+                fi
+        done
+	DISTCHECK_LOG4CPLUS_CONFIGURE_FLAG="-with-log4cplus"
 fi
 
 LOG4CPLUS_LIBS="$LOG4CPLUS_LIBS -llog4cplus"
 
+AC_SUBST(DISTCHECK_LOG4CPLUS_CONFIGURE_FLAG)
 AC_SUBST(LOG4CPLUS_LIBS)
 AC_SUBST(LOG4CPLUS_INCLUDES)
 
@@ -1121,7 +858,7 @@ cat > conftest.cpp << EOF
 AUTOCONF_LOG4CPLUS_VERSION=LOG4CPLUS_VERSION_STR
 EOF
 
-LOG4CPLUS_VERSION=`$CPP $CPPFLAGS conftest.cpp | grep '^AUTOCONF_LOG4CPLUS_VERSION=' | $SED -e 's/^AUTOCONF_LOG4CPLUS_VERSION=//' -e 's/[[ 	]]//g' -e 's/"//g' 2> /dev/null`
+LOG4CPLUS_VERSION=`$CPPP $CPPFLAGS conftest.cpp | grep '^AUTOCONF_LOG4CPLUS_VERSION=' | $SED -e 's/^AUTOCONF_LOG4CPLUS_VERSION=//' -e 's/[[ 	]]//g' -e 's/"//g' 2> /dev/null`
 if test -z "$LOG4CPLUS_VERSION"; then
   LOG4CPLUS_VERSION="unknown"
 fi
@@ -1188,15 +925,19 @@ if test "x$enable_gtest" = "xyes" ; then
                 AC_MSG_ERROR([no gtest source but it was selected])
             fi
         else
+            if test ! -d $GTEST_SOURCE/src -a -d $GTEST_SOURCE/googletest; then
+                GTEST_SOURCE=$GTEST_SOURCE/googletest
+            fi
             AC_CHECK_FILES([$GTEST_SOURCE/src/gtest-all.cc]
                 [$GTEST_SOURCE/src/gtest_main.cc],
                 [have_gtest_source=yes],
                 [AC_MSG_ERROR([no gtest source at $GTEST_SOURCE])])
         fi
         have_gtest_source=yes
-        GTEST_LDFLAGS="\$(top_builddir)/ext/gtest/libgtest.a"
+        GTEST_LDADD="\$(top_builddir)/ext/gtest/libgtest.a"
         DISTCHECK_GTEST_CONFIGURE_FLAG="--with-gtest-source=$GTEST_SOURCE"
         GTEST_INCLUDES="-I$GTEST_SOURCE -I$GTEST_SOURCE/include"
+        GTEST_VERSION="`basename $GTEST_SOURCE`"
     fi
 
     if test "$gtest_path" != "no" ; then
@@ -1226,6 +967,10 @@ if test "x$enable_gtest" = "xyes" ; then
             GTEST_FOUND="false"
             for dir in $GTEST_PATHS; do
                 if test -f "$dir/include/gtest/gtest.h"; then
+                    if ! test -f "$dir/lib/libgtests.a"; then
+                        AC_MSG_WARN([Found Google Test include but not the library in $dir.])
+                        continue
+                    fi
                     GTEST_INCLUDES="-I$dir/include"
                     GTEST_LDFLAGS="-L$dir/lib"
                     GTEST_LDADD="-lgtest"
@@ -1249,10 +994,138 @@ AC_SUBST(GTEST_LDADD)
 AC_SUBST(GTEST_SOURCE)
 
 #
-# ASIO: we extensively use it as the C++ event management module.
+# Check availability of benchmark.
 #
-# Use our 'coroutine' header from ext
-CPPFLAGS="$CPPFLAGS -I\$(top_srcdir)/ext/coroutine"
+BENCHMARK_CPPFLAGS=
+BENCHMARK_LDFLAGS=
+BENCHMARK_LDADD=
+DISTCHECK_BENCHMARK_CONFIGURE_FLAG=
+BENCHMARK_VERSION="unknown"
+
+if test "x$enable_benchmark" = "xyes" ; then
+
+    DISTCHECK_BENCHMARK_CONFIGURE_FLAG="--with-benchmark=$benchmark_path"
+
+    if test -n "$with_benchmark_source" ; then
+
+        if test "x$BENCHMARK_SOURCE" = "xyes" ; then
+
+            AC_MSG_CHECKING([for benchmark source])
+            # If not specified, try some common paths.
+            BENCHMARK_SOURCE=
+            for d in /usr/src/benchmark /usr/local /usr/pkg /opt /opt/local ; do
+                if test -f $d/src/benchmark.cc; then
+                    BENCHMARK_SOURCE=$d
+                    AC_MSG_RESULT([$BENCHMARK_SOURCE])
+                    break
+                fi
+            done
+            if test -z $BENCHMARK_SOURCE ; then
+                AC_MSG_ERROR([no benchmark source but it was selected])
+            fi
+        else
+            if test ! -d $BENCHMARK_SOURCE/src; then
+                BENCHMARK_SOURCE=$BENCHMARK_SOURCE/benchmark
+            fi
+            AC_CHECK_FILES([$BENCHMARK_SOURCE/src/benchmark.cc],
+                [have_benchmark_source=yes],
+                [AC_MSG_ERROR([no benchmark source at $BENCHMARK_SOURCE])])
+        fi
+        have_benchmark_source=yes
+        BENCHMARK_CPPFLAGS=`cat \${BENCHMARK_SOURCE}/build/src/CMakeFiles/benchmark.dir/flags.make | grep CXX_DEFINES | cut -d "=" -f 2`
+        BENCHMARK_LDADD="\$(BENCHMARK_SOURCE)/build/src/libbenchmark.a"
+        DISTCHECK_BENCHMARK_CONFIGURE_FLAG="--with-benchmark-source=$BENCHMARK_SOURCE"
+        BENCHMARK_INCLUDES="-I$BENCHMARK_SOURCE \
+                            -I$BENCHMARK_SOURCE/src \
+                            -I$BENCHMARK_SOURCE/include \
+                            -I$BENCHMARK_SOURCE/include/benchmark"
+        BENCHMARK_VERSION="$(basename $BENCHMARK_SOURCE)"
+    fi
+
+    if test "$benchmark_path" != "no" ; then
+        if test "$benchmark_path" != "yes"; then
+            BENCHMARK_PATHS=$benchmark_path
+        fi
+        if test -z "${BENCHMARK_PATHS}" ; then
+            BENCHMARK_PATHS="/usr /usr/local"
+        fi
+        BENCHMARK_FOUND="false"
+        for dir in ${BENCHMARK_PATHS}; do
+            if test -f "$dir/include/benchmark/benchmark.h"; then
+                if ! test -f "$dir/lib/libbenchmark.a"; then
+                    AC_MSG_WARN([Found Google Benchmark include but not the library in $dir.])
+                    continue
+                fi
+                BENCHMARK_INCLUDES="-I$dir/include"
+                BENCHMARK_LDFLAGS="-L$dir/lib"
+                BENCHMARK_LDADD="$dir/lib/libbenchmark.a "
+                BENCHMARK_FOUND="true"
+                break
+            fi
+        done
+        if test "${BENCHMARK_FOUND}" != "true"; then
+            AC_MSG_ERROR([Cannot find benchmark in: $BENCHMARK_PATHS])
+        fi
+
+    fi
+fi
+AM_CONDITIONAL(HAVE_BENCHMARK, test $enable_benchmark != "no")
+AM_CONDITIONAL(HAVE_BENCHMARK_SOURCE, test "X$have_benchmark_source" = "Xyes")
+AC_SUBST(DISTCHECK_BENCHMARK_CONFIGURE_FLAG)
+AC_SUBST(BENCHMARK_CPPFLAGS)
+AC_SUBST(BENCHMARK_INCLUDES)
+AC_SUBST(BENCHMARK_LDFLAGS)
+AC_SUBST(BENCHMARK_LDADD)
+AC_SUBST(BENCHMARK_SOURCE)
+
+#
+# Some Googletest versions bug with C++11 compilers
+#
+if test $enable_gtest != "no"; then
+   AC_MSG_CHECKING([if Google Test is compatible with the compiler])
+   CPPFLAGS_SAVED=$CPPFLAGS
+   CPPFLAGS="$CPPFLAGS $BOOST_INCLUDES $GTEST_INCLUDES"
+   AC_COMPILE_IFELSE(
+       [AC_LANG_PROGRAM(
+            [#include <boost/shared_ptr.hpp>
+            #include <gtest/gtest.h>
+            void foo() {
+                boost::shared_ptr<int> bar;
+                ASSERT_TRUE(bar);
+            }],
+            [return 0;])],
+        [AC_MSG_RESULT(yes)],
+        [AC_MSG_ERROR([XXX_TRUE() Google Test macros won't compile; the most likely reason is that a later version of Google Test is required])])
+    CPPFLAGS=$CPPFLAGS_SAVED
+fi
+
+# Check for CreateUnifiedDiff from gtest >= 1.8.0
+if test $enable_gtest != "no"; then
+   AC_MSG_CHECKING([for CreateUnifiedDiff in $GTEST_INCLUDES/gtest.h])
+   CPPFLAGS_SAVED=$CPPFLAGS
+   CPPFLAGS="$CPPFLAGS $BOOST_INCLUDES $GTEST_INCLUDES"
+   AC_COMPILE_IFELSE(
+       [AC_LANG_PROGRAM(
+            [#include <boost/algorithm/string.hpp>
+            #include <gtest/gtest.h>
+            #include <string>
+            #include <vector>
+            std::string nodiff(std::string text) {
+                std::vector<std::string> lines;
+                boost::split(lines, text, boost::is_any_of("\n"));
+                using namespace testing::internal;
+                return (edit_distance::CreateUnifiedDiff(lines, lines));
+            }],
+            [return 0;])],
+        [AC_MSG_RESULT(yes)
+        AC_DEFINE([HAVE_CREATE_UNIFIED_DIFF], [1],
+        [Define to 1 if gtest defines edit_distance::CreateUnifiedDiff])],
+        [AC_MSG_RESULT(no)])
+    CPPFLAGS=$CPPFLAGS_SAVED
+fi
+
+#
+# ASIO: we extensively use it as the C++ event management module.
 #
 # Doesn't seem to be required?
 CPPFLAGS="$CPPFLAGS -DBOOST_ASIO_HEADER_ONLY"
@@ -1283,7 +1156,7 @@ AC_CHECK_FUNCS([pselect])
 # code will be updated by the time we really need it.
 AC_CHECK_HEADERS(sys/devpoll.h, ac_cv_have_devpoll=yes, ac_cv_have_devpoll=no)
 if test "X$ac_cv_have_devpoll" = "Xyes" -a "X$GXX" = "Xyes"; then
-	CPPFLAGS="$CPPFLAGS -DBOOST_ASIO_DISABLE_DEV_POLL=1"
+    CPPFLAGS="$CPPFLAGS -DBOOST_ASIO_DISABLE_DEV_POLL=1"
 fi
 
 #
@@ -1299,12 +1172,12 @@ AC_ARG_ENABLE(generate_parser, [AC_HELP_STRING([--enable-generate-parser],
    bison and flex are required [default=no]])],
    enable_generate_parser=$enableval, enable_generate_parser=no)
 
-# Check if flex is avaible. Flex is not needed for building Kea sources,
-# unless you want to regenerate grammar in src/lib/eval
+# Check if flex is available. Flex is not needed for building Kea sources,
+# unless you want to regenerate grammars
 AC_PROG_LEX
 
 # Check if bison is available. Bison is not needed for building Kea sources,
-# unless you want to regenerate grammar in src/lib/eval
+# unless you want to regenerate grammars
 AC_PROG_YACC
 
 if test "x$enable_generate_parser" != "xno"; then
@@ -1318,7 +1191,7 @@ if test "x$enable_generate_parser" != "xno"; then
     fi
 
 # Ok, let's check if we have at least 3.0.0 version of the bison. The code used
-# to generate src/lib/eval parser is roughly based on bison 3.0 examples.
+# to generate parsers is roughly based on bison 3.0 examples.
    cat > bisontest.y << EOF
 %require "3.0.0"
 %token X
@@ -1432,34 +1305,43 @@ AM_COND_IF([HAVE_OPTRESET], [AC_DEFINE([HAVE_OPTRESET], [1], [Check for optreset
 
 AC_DEFINE([CONFIG_H_WAS_INCLUDED], [1], [config.h inclusion marker])
 
-AC_CONFIG_FILES([compatcheck/Makefile
+AC_CONFIG_FILES([Makefile
+                 compatcheck/Makefile
                  dns++.pc
-                 doc/design/datasrc/Makefile
-                 doc/design/Makefile
-                 doc/guide/Makefile
                  doc/Makefile
+                 doc/design/Makefile
+                 doc/design/datasrc/Makefile
+                 doc/guide/Makefile
                  doc/version.ent
-                 ext/coroutine/Makefile
-                 ext/gtest/Makefile
                  ext/Makefile
+                 ext/gtest/Makefile
                  m4macros/Makefile
-                 Makefile
                  src/Makefile
                  src/bin/Makefile
+                 src/bin/admin/Makefile
+                 src/bin/admin/kea-admin
+                 src/bin/admin/tests/Makefile
+                 src/bin/admin/tests/cql_tests.sh
+                 src/bin/admin/tests/data/Makefile
+                 src/bin/admin/tests/memfile_tests.sh
+                 src/bin/admin/tests/mysql_tests.sh
+                 src/bin/admin/tests/pgsql_tests.sh
+                 src/bin/agent/Makefile
+                 src/bin/agent/tests/Makefile
+                 src/bin/agent/tests/ca_process_tests.sh
+                 src/bin/agent/tests/test_data_files_config.h
+                 src/bin/agent/tests/test_libraries.h
                  src/bin/d2/Makefile
-                 src/bin/d2/spec_config.h.pre
                  src/bin/d2/tests/Makefile
                  src/bin/d2/tests/d2_process_tests.sh
                  src/bin/d2/tests/test_data_files_config.h
                  src/bin/dhcp4/Makefile
-                 src/bin/dhcp4/spec_config.h.pre
                  src/bin/dhcp4/tests/Makefile
                  src/bin/dhcp4/tests/dhcp4_process_tests.sh
                  src/bin/dhcp4/tests/marker_file.h
                  src/bin/dhcp4/tests/test_data_files_config.h
                  src/bin/dhcp4/tests/test_libraries.h
                  src/bin/dhcp6/Makefile
-                 src/bin/dhcp6/spec_config.h.pre
                  src/bin/dhcp6/tests/Makefile
                  src/bin/dhcp6/tests/dhcp6_process_tests.sh
                  src/bin/dhcp6/tests/marker_file.h
@@ -1475,16 +1357,15 @@ AC_CONFIG_FILES([compatcheck/Makefile
                  src/bin/perfdhcp/Makefile
                  src/bin/perfdhcp/tests/Makefile
                  src/bin/perfdhcp/tests/testdata/Makefile
-                 src/bin/admin/Makefile
-                 src/bin/admin/kea-admin
-                 src/bin/admin/tests/Makefile
-                 src/bin/admin/tests/data/Makefile
-                 src/bin/admin/tests/memfile_tests.sh
-                 src/bin/admin/tests/mysql_tests.sh
-                 src/bin/admin/tests/pgsql_tests.sh
-                 src/bin/admin/tests/cql_tests.sh
+                 src/bin/shell/Makefile
+                 src/bin/shell/kea-shell
+                 src/bin/shell/tests/Makefile
+                 src/bin/shell/tests/shell_process_tests.sh
+                 src/bin/shell/tests/shell_unittest.py
                  src/hooks/Makefile
                  src/hooks/dhcp/Makefile
+                 src/hooks/dhcp/lease_cmds/Makefile
+                 src/hooks/dhcp/lease_cmds/tests/Makefile
                  src/hooks/dhcp/user_chk/Makefile
                  src/hooks/dhcp/user_chk/tests/Makefile
                  src/hooks/dhcp/user_chk/tests/test_data_files_config.h
@@ -1492,6 +1373,7 @@ AC_CONFIG_FILES([compatcheck/Makefile
                  src/lib/asiodns/Makefile
                  src/lib/asiodns/tests/Makefile
                  src/lib/asiolink/Makefile
+                 src/lib/asiolink/testutils/Makefile
                  src/lib/asiolink/tests/Makefile
                  src/lib/cc/Makefile
                  src/lib/cc/tests/Makefile
@@ -1508,6 +1390,7 @@ AC_CONFIG_FILES([compatcheck/Makefile
                  src/lib/dhcp_ddns/Makefile
                  src/lib/dhcp_ddns/tests/Makefile
                  src/lib/dhcpsrv/Makefile
+                 src/lib/dhcpsrv/benchmarks/Makefile
                  src/lib/dhcpsrv/tests/Makefile
                  src/lib/dhcpsrv/tests/test_libraries.h
                  src/lib/dhcpsrv/testutils/Makefile
@@ -1515,12 +1398,16 @@ AC_CONFIG_FILES([compatcheck/Makefile
                  src/lib/dns/gen-rdatacode.py
                  src/lib/dns/tests/Makefile
                  src/lib/dns/tests/testdata/Makefile
+                 src/lib/eval/Makefile
+                 src/lib/eval/tests/Makefile
                  src/lib/exceptions/Makefile
                  src/lib/exceptions/tests/Makefile
                  src/lib/hooks/Makefile
                  src/lib/hooks/tests/Makefile
                  src/lib/hooks/tests/marker_file.h
                  src/lib/hooks/tests/test_libraries.h
+                 src/lib/http/Makefile
+                 src/lib/http/tests/Makefile
                  src/lib/log/Makefile
                  src/lib/log/compiler/Makefile
                  src/lib/log/interprocess/Makefile
@@ -1534,10 +1421,13 @@ AC_CONFIG_FILES([compatcheck/Makefile
                  src/lib/log/tests/logger_lock_test.sh
                  src/lib/log/tests/severity_test.sh
                  src/lib/log/tests/tempdir.h
-                 src/lib/testutils/Makefile
-                 src/lib/testutils/dhcp_test_lib.sh
+                 src/lib/process/Makefile
+                 src/lib/process/tests/Makefile
+                 src/lib/process/testutils/Makefile
                  src/lib/stats/Makefile
                  src/lib/stats/tests/Makefile
+                 src/lib/testutils/Makefile
+                 src/lib/testutils/dhcp_test_lib.sh
                  src/lib/util/Makefile
                  src/lib/util/io/Makefile
                  src/lib/util/python/Makefile
@@ -1547,31 +1437,42 @@ AC_CONFIG_FILES([compatcheck/Makefile
                  src/lib/util/threads/Makefile
                  src/lib/util/threads/tests/Makefile
                  src/lib/util/unittests/Makefile
-                 src/lib/eval/Makefile
-                 src/lib/eval/tests/Makefile
                  src/share/Makefile
                  src/share/database/Makefile
                  src/share/database/scripts/Makefile
+                 src/share/database/scripts/cql/Makefile
+                 src/share/database/scripts/cql/upgrade_1.0_to_2.0.sh
                  src/share/database/scripts/mysql/Makefile
                  src/share/database/scripts/mysql/upgrade_1.0_to_2.0.sh
                  src/share/database/scripts/mysql/upgrade_2.0_to_3.0.sh
                  src/share/database/scripts/mysql/upgrade_3.0_to_4.0.sh
                  src/share/database/scripts/mysql/upgrade_4.0_to_4.1.sh
+                 src/share/database/scripts/mysql/upgrade_4.1_to_5.0.sh
+                 src/share/database/scripts/mysql/upgrade_5.0_to_5.1.sh
+                 src/share/database/scripts/mysql/upgrade_5.1_to_5.2.sh
+                 src/share/database/scripts/mysql/upgrade_5.2_to_6.0.sh
                  src/share/database/scripts/pgsql/Makefile
                  src/share/database/scripts/pgsql/upgrade_1.0_to_2.0.sh
                  src/share/database/scripts/pgsql/upgrade_2.0_to_3.0.sh
-                 src/share/database/scripts/cql/Makefile
+                 src/share/database/scripts/pgsql/upgrade_3.0_to_3.1.sh
+                 src/share/database/scripts/pgsql/upgrade_3.1_to_3.2.sh
+                 src/share/database/scripts/pgsql/upgrade_3.2_to_3.3.sh
+                 src/share/database/scripts/pgsql/upgrade_3.3_to_4.0.sh
                  tools/Makefile
                  tools/path_replacer.sh
 ])
 
- AC_CONFIG_COMMANDS([permissions], [
+AC_CONFIG_COMMANDS([permissions], [
+           chmod +x src/bin/admin/kea-admin
            chmod +x src/bin/dhcp4/tests/dhcp4_process_tests.sh
            chmod +x src/bin/dhcp6/tests/dhcp6_process_tests.sh
            chmod +x src/bin/keactrl/keactrl
            chmod +x src/bin/keactrl/tests/keactrl_tests.sh
-           chmod +x src/bin/admin/kea-admin
+           chmod +x src/bin/shell/kea-shell
+           chmod +x src/bin/shell/tests/shell_process_tests.sh
+           chmod +x src/bin/shell/tests/shell_unittest.py
            chmod +x src/lib/dns/gen-rdatacode.py
+           chmod +x src/lib/log/tests/buffer_logger_test.sh
            chmod +x src/lib/log/tests/console_test.sh
            chmod +x src/lib/log/tests/destination_test.sh
            chmod +x src/lib/log/tests/init_logger_test.sh
@@ -1599,15 +1500,30 @@ cat > config.report << END
     -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 Package:
-  Name:            ${PACKAGE_NAME}
-  Version:         ${PACKAGE_VERSION}
-  Extended version:${EXTENDED_VERSION}
-  OS Family:       ${OS_TYPE}
-  Using GNU sed:   ${GNU_SED}
+  Name:              ${PACKAGE_NAME}
+  Version:           ${PACKAGE_VERSION}
+  Extended version:  ${EXTENDED_VERSION}
+  OS Family:         ${OS_TYPE}
+  Using GNU sed:     ${GNU_SED}
+END
+if test "$PREMIUM" != ""; then
+cat >> config.report << END
+  Premium package:   yes
+  Tier1 Packages:    ${TIER1_PACKAGES}
+  Tier2 Packages:    ${TIER2_PACKAGES}
+  Included Packages: ${INCLUDED_PACKAGES}
+END
+else
+cat >> config.report << END
+  Premium package:   no
+END
+fi
+cat >> config.report << END
 
 C++ Compiler:
   CXX:             ${CXX}
   CXX_VERSION:     ${CXX_VERSION}
+  CXX_STANDARD:    ${CXX_STANDARD}
   DEFS:            ${DEFS}
   CPPFLAGS:        ${CPPFLAGS}
   CXXFLAGS:        ${CXXFLAGS}
@@ -1618,19 +1534,16 @@ END
 if test "$PYTHON" != "no" ; then
 cat >> config.report << END
 
-Python3:
+Python:
+  PYTHON:          ${PYTHON}
   PYTHON_VERSION:  ${PYTHON_VERSION}
-  PYTHON_INCLUDES: ${PYTHON_INCLUDES}
-  PYTHON_CXXFLAGS: ${PYTHON_CXXFLAGS}
-  PYTHON_LDFLAGS:  ${PYTHON_LDFLAGS}
-  PYTHON_LIB:      ${PYTHON_LIB}
 
 END
 else
 cat >> config.report << END
 
-Python3:
-  not installed
+Python:
+  PYTHON_VERSION:  not needed (because kea-shell is disabled)
 
 END
 fi
@@ -1641,6 +1554,18 @@ Boost:
   BOOST_INCLUDES:  ${BOOST_INCLUDES}
   BOOST_LIBS:      ${BOOST_LIBS}
 
+END
+if test x"$BOOST_LIBS" = "x"; then
+   cat >> config.report << END
+    WARNING: You will be building with boost headers only rather
+    than linking with boost_system library. This is NOT recommended as
+    it may result in non-optimized code on some platforms and
+    introduce runtime errors on others.
+
+END
+fi
+
+cat >> config.report << END
 ${CRYPTO_NAME}:
   CRYPTO_VERSION:  ${CRYPTO_VERSION}
   CRYPTO_CFLAGS:   ${CRYPTO_CFLAGS}
@@ -1651,9 +1576,9 @@ ${CRYPTO_NAME}:
 ${DISABLED_CRYPTO}: no
 
 Log4cplus:
-  LOG4CPLUS_VERSION: ${LOG4CPLUS_VERSION}
+  LOG4CPLUS_VERSION:  ${LOG4CPLUS_VERSION}
   LOG4CPLUS_INCLUDES: ${LOG4CPLUS_INCLUDES}
-  LOG4CPLUS_LIBS:  ${LOG4CPLUS_LIBS}
+  LOG4CPLUS_LIBS:     ${LOG4CPLUS_LIBS}
 
 Flex/bison:
   FLEX:  ${LEX}
@@ -1698,9 +1623,9 @@ if test "$CQL_CPPFLAGS" != "" ; then
 cat >> config.report << END
 
 Cassandra CQL:
-  CQL_VERSION:   ${CQL_VERSION}
-  CQL_CPPFLAGS:  ${CQL_CPPFLAGS}
-  CQL_LIBS:      ${CQL_LIBS}
+  CQL_VERSION:     ${CQL_VERSION}
+  CQL_CPPFLAGS:    ${CQL_CPPFLAGS}
+  CQL_LIBS:        ${CQL_LIBS}
 END
 else
 cat >> config.report << END
@@ -1713,25 +1638,58 @@ fi
 if test "$enable_gtest" != "no"; then
 cat >> config.report << END
 
-GTest:
+Google Test:
   GTEST_VERSION:   ${GTEST_VERSION}
   GTEST_INCLUDES:  ${GTEST_INCLUDES}
   GTEST_LDFLAGS:   ${GTEST_LDFLAGS}
   GTEST_LDADD:     ${GTEST_LDADD}
   GTEST_SOURCE:    ${GTEST_SOURCE}
 END
+else
+cat >> config.report << END
+Google Test:
+  no
+END
+fi
+
+if test "$enable_benchmark" != "no"; then
+cat >> config.report << END
+
+Google Benchmark:
+  BENCHMARK_VERSION:   ${BENCHMARK_VERSION}
+  BENCHMARK_CPPFLAGS:  ${BENCHMARK_CPPFLAGS}
+  BENCHMARK_INCLUDES:  ${BENCHMARK_INCLUDES}
+  BENCHMARK_LDFLAGS:   ${BENCHMARK_LDFLAGS}
+  BENCHMARK_LDADD:     ${BENCHMARK_LDADD}
+  BENCHMARK_SOURCE:    ${BENCHMARK_SOURCE}
+END
+else
+cat >> config.report << END
+Google Benchmark:
+  no
+END
+fi
+
+if test "$FREERADIUS_INCLUDE" != ""; then
+cat >> config.report << END
+
+FreeRADIUS client:
+  FREERADIUS_INCLUDE: ${FREERADIUS_INCLUDE}
+  FREERADIUS_LIB:     ${FREERADIUS_LIB}
+END
 fi
 
 cat >> config.report << END
 
 Developer:
-  Enable Debugging: $debug_enabled
-  Google Tests: $enable_gtest
-  Valgrind: $found_valgrind
-  C++ Code Coverage: $USE_LCOV
-  Logger checks: $enable_logger_checks
+  Enable Debugging:       $debug_enabled
+  Google Tests:           $enable_gtest
+  Valgrind:               $found_valgrind
+  C++ Code Coverage:      $USE_LCOV
+  Logger checks:          $enable_logger_checks
   Generate Documentation: $enable_generate_docs
-  Parser Generation: $enable_generate_parser
+  Parser Generation:      $enable_generate_parser
+  Kea-shell:              $enable_shell
 
 END
 

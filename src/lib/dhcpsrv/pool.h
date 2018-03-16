@@ -1,4 +1,4 @@
-// Copyright (C) 2012-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2012-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,8 +8,14 @@
 #define POOL_H
 
 #include <asiolink/io_address.h>
+#include <dhcp/classify.h>
+#include <dhcp/option6_pdexclude.h>
 #include <boost/shared_ptr.hpp>
+#include <cc/data.h>
+#include <cc/user_context.h>
+#include <dhcpsrv/cfg_option.h>
 #include <dhcpsrv/lease.h>
+#include <boost/shared_ptr.hpp>
 
 #include <vector>
 
@@ -20,7 +26,7 @@ namespace dhcp {
 ///
 /// Stores information about pool of IPv4 or IPv6 addresses.
 /// That is a basic component of a configuration.
-class Pool {
+class Pool : public UserContext {
 
 public:
     /// @note:
@@ -79,6 +85,74 @@ public:
     uint64_t getCapacity() const {
         return (capacity_);
     }
+
+    /// @brief Returns pointer to the option data configuration for this pool.
+    CfgOptionPtr getCfgOption() {
+        return (cfg_option_);
+    }
+
+    /// @brief Returns const pointer to the option data configuration for
+    /// this pool.
+    ConstCfgOptionPtr getCfgOption() const {
+        return (cfg_option_);
+    }
+
+    /// @brief Checks whether this pool supports client that belongs to
+    /// specified classes.
+    ///
+    /// @todo: currently doing the same as network which needs improving.
+    ///
+    /// @param client_classes list of all classes the client belongs to
+    /// @return true if client can be supported, false otherwise
+    bool clientSupported(const ClientClasses& client_classes) const;
+
+    /// @brief Adds class class_name to the list of supported classes
+    ///
+    /// @param class_name client class to be supported by this pool
+    void allowClientClass(const ClientClass& class_name);
+
+    /// @brief returns the client class white list
+    ///
+    /// @note Currently white list is empty or has one element
+    /// @note The returned reference is only valid as long as the object
+    /// returned is valid.
+    ///
+    /// @return client classes @ref white_list_
+    const ClientClasses& getClientClasses() const {
+        return (white_list_);
+    }
+
+    /// @brief returns the last address that was tried from this pool
+    ///
+    /// @return address/prefix that was last tried from this pool
+    isc::asiolink::IOAddress getLastAllocated() const {
+        return last_allocated_;
+    }
+
+    /// @brief checks if the last address is valid
+    /// @return true if the last address is valid
+    bool isLastAllocatedValid() const {
+        return last_allocated_valid_;
+    }
+
+    /// @brief sets the last address that was tried from this pool
+    ///
+    /// @param addr address/prefix to that was tried last
+    void setLastAllocated(const isc::asiolink::IOAddress& addr) {
+        last_allocated_ = addr;
+        last_allocated_valid_ = true;
+    }
+
+    /// @brief resets the last address to invalid
+    void resetLastAllocated() {
+        last_allocated_valid_ = false;
+    }
+
+    /// @brief Unparse a pool object.
+    ///
+    /// @return A pointer to unparsed pool configuration.
+    virtual data::ElementPtr toElement() const;
+
 protected:
 
     /// @brief protected constructor
@@ -113,11 +187,6 @@ protected:
     /// @brief The last address in a pool
     isc::asiolink::IOAddress last_;
 
-    /// @brief Comments field
-    ///
-    /// @todo: This field is currently not used.
-    std::string comments_;
-
     /// @brief defines a lease type that will be served from this pool
     Lease::Type type_;
 
@@ -128,6 +197,25 @@ protected:
     /// the result. Note that for very large pools, the number is capped at
     /// max value of uint64_t.
     uint64_t capacity_;
+
+    /// @brief Pointer to the option data configuration for this pool.
+    CfgOptionPtr cfg_option_;
+
+    /// @brief Optional definition of a client class
+    ///
+    /// If empty, all classes are allowed. If non-empty, only those listed
+    /// here are allowed.
+    ///
+    /// @ref Network::white_list_
+    ClientClasses white_list_;
+
+    /// @brief Last allocated address
+    /// See @ref isc::dhcp::Subnet::last_allocated_ia_
+    /// Initialized and reset to first
+    isc::asiolink::IOAddress last_allocated_;
+
+    /// @brief Status of last allocated address
+    bool last_allocated_valid_;
 };
 
 /// @brief Pool information for IPv4 addresses
@@ -149,6 +237,11 @@ public:
     /// @param prefix_len specifies length of the prefix of the pool
     Pool4(const isc::asiolink::IOAddress& prefix,
           uint8_t prefix_len);
+
+    /// @brief Unparse a Pool4 object.
+    ///
+    /// @return A pointer to unparsed Pool4 configuration.
+    virtual data::ElementPtr toElement() const;
 };
 
 /// @brief a pointer an IPv4 Pool
@@ -197,9 +290,26 @@ public:
     /// @param type type of the pool (IA, TA or PD)
     /// @param prefix specifies prefix of the pool
     /// @param prefix_len specifies prefix length of the pool
-    /// @param delegated_len specifies lenght of the delegated prefixes
+    /// @param delegated_len specifies length of the delegated prefixes
     Pool6(Lease::Type type, const isc::asiolink::IOAddress& prefix,
           uint8_t prefix_len, uint8_t delegated_len = 128);
+
+    /// @brief Constructor for DHCPv6 prefix pool with an excluded prefix.
+    ///
+    /// If @c excluded_prefix is equal to '::' and the @c excluded_prefix_len
+    /// is equal to 0, the excluded prefix is assumed to be unspecified for
+    /// the pool. In this case, the server will not send the Prefix Exclude
+    /// option to a client.
+    ///
+    /// @param prefix specified a prefix of the pool.
+    /// @param prefix_len specifies prefix length of the pool.
+    /// @param delegated_len specifies length of the delegated prefixes.
+    /// @param excluded_prefix specifies an excluded prefix as per RFC6603.
+    /// @param excluded_prefix_len specifies length of an excluded prefix.
+    Pool6(const asiolink::IOAddress& prefix, const uint8_t prefix_len,
+          const uint8_t delegated_len,
+          const asiolink::IOAddress& excluded_prefix,
+          const uint8_t excluded_prefix_len);
 
     /// @brief returns pool type
     ///
@@ -213,9 +323,22 @@ public:
     /// This may be useful for "prefix/len" style definition for
     /// addresses, but is mostly useful for prefix pools.
     /// @return prefix length (1-128)
-    uint8_t getLength() {
+    uint8_t getLength() const {
         return (prefix_len_);
     }
+
+    /// @brief Returns instance of the pool specific Prefix Exclude option.
+    ///
+    /// @return An instance of the Prefix Exclude option (RFC 6603) or NULL
+    /// if such option hasn't been specified for the pool.
+    Option6PDExcludePtr getPrefixExcludeOption() const {
+        return (pd_exclude_option_);
+    }
+
+    /// @brief Unparse a Pool6 object.
+    ///
+    /// @return A pointer to unparsed Pool6 configuration.
+    virtual data::ElementPtr toElement() const;
 
     /// @brief returns textual representation of the pool
     ///
@@ -223,8 +346,38 @@ public:
     virtual std::string toText() const;
 
 private:
+
+    /// @brief Generic method initializing a DHCPv6 pool.
+    ///
+    /// This method should be called by the constructors to initialize
+    /// DHCPv6 pools.
+    ///
+    /// @param Lease/pool type.
+    /// @param prefix An address or delegated prefix (depending on the
+    /// pool type specified as @c type).
+    /// @param prefix_len Prefix length. If a pool is an address pool,
+    /// this value should be set to 128.
+    /// @param delegated_len Length of the delegated prefixes. If a pool
+    /// is an address pool, this value should be set to 128.
+    /// @param excluded_prefix An excluded prefix as per RFC6603. This
+    /// value should only be specified for prefix pools. The value of
+    /// '::' means "unspecified".
+    /// @param excluded_prefix_len Length of the excluded prefix. This
+    /// is only specified for prefix pools. The value of 0 should be
+    /// used when @c excluded_prefix is not specified.
+    void init(const Lease::Type& type,
+              const asiolink::IOAddress& prefix,
+              const uint8_t prefix_len,
+              const uint8_t delegated_len,
+              const asiolink::IOAddress& excluded_prefix,
+              const uint8_t excluded_prefix_len);
+
     /// @brief Defines prefix length (for TYPE_PD only)
     uint8_t prefix_len_;
+
+    /// @brief A pointer to the Prefix Exclude option (RFC 6603).
+    Option6PDExcludePtr pd_exclude_option_;
+
 };
 
 /// @brief a pointer an IPv6 Pool

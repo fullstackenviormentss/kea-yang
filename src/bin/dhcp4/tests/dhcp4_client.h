@@ -81,6 +81,12 @@ public:
         /// @brief Holds server id of the server which responded to the client's
         /// request.
         asiolink::IOAddress serverid_;
+        /// @brief Holds returned siaddr.
+        asiolink::IOAddress siaddr_;
+        /// @brief Holds returned sname.
+        std::string sname_;
+        /// @brief Holds returned (boot)file.
+        std::string boot_file_name_;
 
         /// @brief Constructor.
         Configuration();
@@ -199,6 +205,15 @@ public:
     /// When the server returns the DHCPACK the configuration carried in the
     /// DHCPACK message is applied and can be obtained from the @c config_.
     void doRequest();
+
+    /// @brief Receives a response from the server.
+    ///
+    /// This method is useful to receive response from the server after
+    /// parking a packet. In this case, the packet is not received as a
+    /// result of initial exchange, e.g. @c doRequest. The test can call
+    /// this method to complete the transaction when it expects that the
+    /// packet has been unparked.
+    void receiveResponse();
 
     /// @brief Generates a hardware address used by the client.
     ///

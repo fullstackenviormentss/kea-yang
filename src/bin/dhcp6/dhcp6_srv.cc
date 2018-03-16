@@ -1,4 +1,4 @@
-// Copyright (C) 2011-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2011-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -20,6 +20,7 @@
 #include <dhcp/option6_iaaddr.h>
 #include <dhcp/option6_iaprefix.h>
 #include <dhcp/option6_status_code.h>
+#include <dhcp/option6_pdexclude.h>
 #include <dhcp/option_custom.h>
 #include <dhcp/option_vendor.h>
 #include <dhcp/option_vendor_class.h>
@@ -47,6 +48,7 @@
 
 #include <util/encode/hex.h>
 #include <util/io_utilities.h>
+#include <util/pointer_util.h>
 #include <util/range_utilities.h>
 #include <log/logger.h>
 #include <cryptolink/cryptolink.h>
@@ -67,7 +69,10 @@
 #include <boost/foreach.hpp>
 #include <boost/tokenizer.hpp>
 #include <boost/algorithm/string/erase.hpp>
+#include <boost/algorithm/string/join.hpp>
+#include <boost/algorithm/string/split.hpp>
 
+#include <algorithm>
 #include <stdlib.h>
 #include <time.h>
 #include <iomanip>
@@ -96,16 +101,18 @@ struct Dhcp6Hooks {
     int hook_index_pkt6_send_;      ///< index for "pkt6_send" hook point
     int hook_index_buffer6_send_;   ///< index for "buffer6_send" hook point
     int hook_index_lease6_decline_; ///< index for "lease6_decline" hook point
+    int hook_index_host6_identifier_;///< index for "host6_identifier" hook point
 
     /// Constructor that registers hook points for DHCPv6 engine
     Dhcp6Hooks() {
-        hook_index_buffer6_receive_= HooksManager::registerHook("buffer6_receive");
-        hook_index_pkt6_receive_   = HooksManager::registerHook("pkt6_receive");
-        hook_index_subnet6_select_ = HooksManager::registerHook("subnet6_select");
-        hook_index_lease6_release_ = HooksManager::registerHook("lease6_release");
-        hook_index_pkt6_send_      = HooksManager::registerHook("pkt6_send");
-        hook_index_buffer6_send_   = HooksManager::registerHook("buffer6_send");
-        hook_index_lease6_decline_ = HooksManager::registerHook("lease6_decline");
+        hook_index_buffer6_receive_ = HooksManager::registerHook("buffer6_receive");
+        hook_index_pkt6_receive_    = HooksManager::registerHook("pkt6_receive");
+        hook_index_subnet6_select_  = HooksManager::registerHook("subnet6_select");
+        hook_index_lease6_release_  = HooksManager::registerHook("lease6_release");
+        hook_index_pkt6_send_       = HooksManager::registerHook("pkt6_send");
+        hook_index_buffer6_send_    = HooksManager::registerHook("buffer6_send");
+        hook_index_lease6_decline_  = HooksManager::registerHook("lease6_decline");
+        hook_index_host6_identifier_= HooksManager::registerHook("host6_identifier");
     }
 };
 
@@ -171,7 +178,8 @@ namespace dhcp {
 const std::string Dhcpv6Srv::VENDOR_CLASS_PREFIX("VENDOR_CLASS_");
 
 Dhcpv6Srv::Dhcpv6Srv(uint16_t port)
-    : port_(port), serverid_(), shutdown_(true), alloc_engine_()
+    : io_service_(new IOService()), port_(port), serverid_(), shutdown_(true),
+      alloc_engine_(), name_change_reqs_(), network_state_(NetworkState::DHCPv6)
 {
 
     LOG_DEBUG(dhcp6_logger, DBG_DHCP6_START, DHCP6_OPEN_SOCKET).arg(port);
@@ -288,8 +296,10 @@ Dhcpv6Srv::testUnicast(const Pkt6Ptr& pkt) const {
 }
 
 void
-Dhcpv6Srv::initContext(const Pkt6Ptr& pkt, AllocEngine::ClientContext6& ctx) {
-    ctx.subnet_ = selectSubnet(pkt);
+Dhcpv6Srv::initContext(const Pkt6Ptr& pkt,
+                       AllocEngine::ClientContext6& ctx,
+                       bool& drop) {
+    ctx.subnet_ = selectSubnet(pkt, drop);
     ctx.duid_ = pkt->getClientId(),
     ctx.fwd_dns_update_ = false;
     ctx.rev_dns_update_ = false;
@@ -298,11 +308,15 @@ Dhcpv6Srv::initContext(const Pkt6Ptr& pkt, AllocEngine::ClientContext6& ctx) {
     ctx.callout_handle_ = getCalloutHandle(pkt);
     ctx.hwaddr_ = getMAC(pkt);
 
+    if (drop) {
+        // Caller will immediately drop the packet so simply return now.
+        return;
+    }
+
     // Collect host identifiers if host reservations enabled. The identifiers
     // are stored in order of preference. The server will use them in that
     // order to search for host reservations.
-    if (ctx.subnet_ &&
-        (ctx.subnet_->getHostReservationMode() != Subnet::HR_DISABLED)) {
+    if (ctx.subnet_) {
         const ConstCfgHostOperationsPtr cfg =
             CfgMgr::instance().getCurrentCfg()->getCfgHostOperations6();
         BOOST_FOREACH(const Host::IdentifierType& id_type,
@@ -319,7 +333,41 @@ Dhcpv6Srv::initContext(const Pkt6Ptr& pkt, AllocEngine::ClientContext6& ctx) {
                     ctx.addHostIdentifier(id_type, ctx.hwaddr_->hwaddr_);
                 }
                 break;
+            case Host::IDENT_FLEX:
+                // At this point the information in the packet has been unpacked into
+                // the various packet fields and option objects has been created.
+                // Execute callouts registered for packet6_receive.
+                if (HooksManager::calloutsPresent(Hooks.hook_index_host6_identifier_)) {
+                    CalloutHandlePtr callout_handle = getCalloutHandle(pkt);
 
+                    Host::IdentifierType type = Host::IDENT_FLEX;
+                    std::vector<uint8_t> id;
+
+                    // Delete previously set arguments
+                    callout_handle->deleteAllArguments();
+
+                    // Pass incoming packet as argument
+                    callout_handle->setArgument("query6", pkt);
+                    callout_handle->setArgument("id_type", type);
+                    callout_handle->setArgument("id_value", id);
+
+                    // Call callouts
+                    HooksManager::callCallouts(Hooks.hook_index_host6_identifier_,
+                                               *callout_handle);
+
+                    callout_handle->getArgument("id_type", type);
+                    callout_handle->getArgument("id_value", id);
+
+                    if ((callout_handle->getStatus() == CalloutHandle::NEXT_STEP_CONTINUE) &&
+                        !id.empty()) {
+
+                        LOG_DEBUG(packet6_logger, DBGLVL_TRACE_BASIC, DHCP6_FLEX_ID)
+                            .arg(Host::getIdentifierAsText(type, &id[0], id.size()));
+
+                        ctx.addHostIdentifier(type, id);
+                    }
+                }
+                break;
             default:
                 ;
             }
@@ -334,6 +382,7 @@ bool Dhcpv6Srv::run() {
     while (!shutdown_) {
         try {
             run_one();
+            getIOService()->poll();
         } catch (const std::exception& e) {
             // General catch-all standard exceptions that are not caught by more
             // specific catches.
@@ -355,8 +404,10 @@ void Dhcpv6Srv::run_one() {
     Pkt6Ptr rsp;
 
     try {
-        uint32_t timeout = 1000;
-        LOG_DEBUG(packet6_logger, DBG_DHCP6_DETAIL, DHCP6_BUFFER_WAIT).arg(timeout);
+        // Set select() timeout to 1s. This value should not be modified
+        // because it is important that the select() returns control
+        // frequently so as the IOService can be polled for ready handlers.
+        uint32_t timeout = 1;
         query = receivePacket(timeout);
 
         // Log if packet has arrived. We can't log the detailed information
@@ -379,10 +430,13 @@ void Dhcpv6Srv::run_one() {
             // See processStatsReceived().
             StatsMgr::instance().addValue("pkt6-received", static_cast<int64_t>(1));
 
-        } else {
-            LOG_DEBUG(packet6_logger, DBG_DHCP6_DETAIL, DHCP6_BUFFER_WAIT_INTERRUPTED)
-                .arg(timeout);
         }
+        // We used to log that the wait was interrupted, but this is no longer
+        // the case. Our wait time is 1s now, so the lack of query packet more
+        // likely means that nothing new appeared within a second, rather than
+        // we were interrupted. And we don't want to print a message every
+        // second.
+
 
     } catch (const SignalInterruptOnSelect) {
         // Packet reception interrupted because a signal has been received.
@@ -420,7 +474,15 @@ void Dhcpv6Srv::run_one() {
         return;
     }
 
-    processPacket(query, rsp);
+    // If the DHCP service has been globally disabled, drop the packet.
+    if (!network_state_.isServiceEnabled()) {
+        LOG_DEBUG(bad_packet6_logger, DBG_DHCP6_DETAIL_DATA,
+                  DHCP6_PACKET_DROP_DHCP_DISABLED)
+            .arg(query->getLabel());
+        return;
+    } else {
+        processPacket(query, rsp);
+    }
 
     if (!rsp) {
         return;
@@ -450,13 +512,12 @@ void Dhcpv6Srv::run_one() {
             // Callouts decided to skip the next processing step. The next
             // processing step would to parse the packet, so skip at this
             // stage means drop.
-            if (callout_handle->getStatus() == CalloutHandle::NEXT_STEP_SKIP) {
+            if ((callout_handle->getStatus() == CalloutHandle::NEXT_STEP_SKIP) ||
+                (callout_handle->getStatus() == CalloutHandle::NEXT_STEP_DROP)) {
                 LOG_DEBUG(hooks_logger, DBG_DHCP6_HOOKS, DHCP6_HOOK_BUFFER_SEND_SKIP)
                     .arg(rsp->getLabel());
                 return;
             }
-
-            /// @todo: Add support for DROP status
 
             callout_handle->getArgument("response6", rsp);
         }
@@ -507,7 +568,20 @@ Dhcpv6Srv::processPacket(Pkt6Ptr& query, Pkt6Ptr& rsp) {
             skip_unpack = true;
         }
 
-        /// @todo: Add support for DROP status.
+        // Callouts decided to drop the received packet
+        // The response (rsp) is null so the caller (run_one) will
+        // immediately return too.
+        if (callout_handle->getStatus() == CalloutHandle::NEXT_STEP_DROP) {
+            LOG_DEBUG(hooks_logger, DBG_DHCP6_DETAIL, DHCP6_HOOK_BUFFER_RCVD_DROP)
+                .arg(query->getRemoteAddr().toText())
+                .arg(query->getLocalAddr().toText())
+                .arg(query->getIface());
+
+            // Increase the statistic of dropped packets.
+            StatsMgr::instance().addValue("pkt6-receive-drop",
+                                          static_cast<int64_t>(1));
+            return;
+        }
 
         callout_handle->getArgument("query6", query);
     }
@@ -521,6 +595,12 @@ Dhcpv6Srv::processPacket(Pkt6Ptr& query, Pkt6Ptr& rsp) {
                 .arg(query->getLocalAddr().toText())
                 .arg(query->getIface());
             query->unpack();
+        } catch (const SkipRemainingOptionsError& e) {
+            // An option failed to unpack but we are to attempt to process it
+            // anyway.  Log it and let's hope for the best.
+            LOG_DEBUG(options6_logger, DBG_DHCP6_DETAIL,
+                      DHCP6_PACKET_OPTIONS_SKIPPED)
+                .arg(e.what());
         } catch (const std::exception &e) {
             // Failed to parse the packet.
             LOG_DEBUG(bad_packet6_logger, DBG_DHCP6_DETAIL,
@@ -593,13 +673,15 @@ Dhcpv6Srv::processPacket(Pkt6Ptr& query, Pkt6Ptr& rsp) {
         // Callouts decided to skip the next processing step. The next
         // processing step would to process the packet, so skip at this
         // stage means drop.
-        if (callout_handle->getStatus() == CalloutHandle::NEXT_STEP_SKIP) {
+        if ((callout_handle->getStatus() == CalloutHandle::NEXT_STEP_SKIP) ||
+            (callout_handle->getStatus() == CalloutHandle::NEXT_STEP_DROP)) {
             LOG_DEBUG(hooks_logger, DBG_DHCP6_HOOKS, DHCP6_HOOK_PACKET_RCVD_SKIP)
                 .arg(query->getLabel());
+            // Increase the statistic of dropped packets.
+            StatsMgr::instance().addValue("pkt6-receive-drop",
+                                          static_cast<int64_t>(1));
             return;
         }
-
-        /// @todo: Add support for DROP status.
 
         callout_handle->getArgument("query6", query);
     }
@@ -752,7 +834,13 @@ Dhcpv6Srv::processPacket(Pkt6Ptr& query, Pkt6Ptr& rsp) {
             skip_pack = true;
         }
 
-        /// @todo: Add support for DROP status
+        /// Callouts decided to drop the packet.
+        if (callout_handle->getStatus() == CalloutHandle::NEXT_STEP_DROP) {
+            LOG_DEBUG(hooks_logger, DBG_DHCP6_HOOKS, DHCP6_HOOK_PACKET_SEND_DROP)
+                .arg(rsp->getLabel());
+            rsp.reset();
+            return;
+        }
     }
 
     if (!skip_pack) {
@@ -814,13 +902,36 @@ Dhcpv6Srv::buildCfgOptionList(const Pkt6Ptr& question,
                               AllocEngine::ClientContext6& ctx,
                               CfgOptionList& co_list) {
     // Firstly, host specific options.
-    if (ctx.host_ && !ctx.host_->getCfgOption6()->empty()) {
-        co_list.push_back(ctx.host_->getCfgOption6());
+    if (ctx.currentHost() && !ctx.currentHost()->getCfgOption6()->empty()) {
+        co_list.push_back(ctx.currentHost()->getCfgOption6());
     }
 
-    // Next, subnet configured options.
-    if (ctx.subnet_ && !ctx.subnet_->getCfgOption()->empty()) {
-        co_list.push_back(ctx.subnet_->getCfgOption());
+    // Secondly, pool specific options. Pools are defined within a subnet, so
+    // if there is no subnet, there is nothing to do.
+    if (ctx.subnet_) {
+        BOOST_FOREACH(const AllocEngine::ResourceType& resource,
+                      ctx.allocated_resources_) {
+            PoolPtr pool = ctx.subnet_->getPool(resource.second == 128 ?
+                                                Lease::TYPE_NA : Lease::TYPE_PD,
+                                                resource.first, false);
+            if (pool && !pool->getCfgOption()->empty()) {
+                co_list.push_back(pool->getCfgOption());
+            }
+        }
+    };
+
+    if (ctx.subnet_) {
+        // Next, subnet configured options.
+        if (!ctx.subnet_->getCfgOption()->empty()) {
+            co_list.push_back(ctx.subnet_->getCfgOption());
+        }
+
+        // Then, shared network specific options.
+        SharedNetwork6Ptr network;
+        ctx.subnet_->getSharedNetwork(network);
+        if (network && !network->getCfgOption()->empty()) {
+            co_list.push_back(network->getCfgOption());
+        }
     }
 
     // Each class in the incoming packet
@@ -842,10 +953,12 @@ Dhcpv6Srv::buildCfgOptionList(const Pkt6Ptr& question,
             // Skip it
             continue;
         }
+
         if (ccdef->getCfgOption()->empty()) {
             // Skip classes which don't configure options
             continue;
         }
+
         co_list.push_back(ccdef->getCfgOption());
     }
 
@@ -859,24 +972,45 @@ void
 Dhcpv6Srv::appendRequestedOptions(const Pkt6Ptr& question, Pkt6Ptr& answer,
                                   const CfgOptionList& co_list) {
 
+    // Unlikely short cut
+    if (co_list.empty()) {
+        return;
+    }
+
+    std::vector<uint16_t> requested_opts;
+
     // Client requests some options using ORO option. Try to
     // get this option from client's message.
     boost::shared_ptr<OptionIntArray<uint16_t> > option_oro =
         boost::dynamic_pointer_cast<OptionIntArray<uint16_t> >
         (question->getOption(D6O_ORO));
 
-    // Option ORO not found? We're done here then.
-    if (!option_oro || co_list.empty()) {
-        return;
+    // Get the list of options that client requested.
+    if (option_oro) {
+        requested_opts = option_oro->getValues();
+    }
+    // Iterate on the configured option list to add persistent options
+    for (CfgOptionList::const_iterator copts = co_list.begin();
+         copts != co_list.end(); ++copts) {
+        const OptionContainerPtr& opts = (*copts)->getAll(DHCP6_OPTION_SPACE);
+        if (!opts) {
+            continue;
+        }
+        // Get persistent options
+        const OptionContainerPersistIndex& idx = opts->get<2>();
+        const OptionContainerPersistRange& range = idx.equal_range(true);
+        for (OptionContainerPersistIndex::const_iterator desc = range.first;
+             desc != range.second; ++desc) {
+            // Add the persistent option code to requested options
+            requested_opts.push_back(desc->option_->getType());
+        }
     }
 
-    // Get the list of options that client requested.
-    const std::vector<uint16_t>& requested_opts = option_oro->getValues();
     BOOST_FOREACH(uint16_t opt, requested_opts) {
         // Iterate on the configured option list
         for (CfgOptionList::const_iterator copts = co_list.begin();
              copts != co_list.end(); ++copts) {
-            OptionDescriptor desc = (*copts)->get("dhcp6", opt);
+            OptionDescriptor desc = (*copts)->get(DHCP6_OPTION_SPACE, opt);
             // Got it: add it and jump to the outer loop
             if (desc.option_) {
                 answer->addOption(desc.option_);
@@ -908,24 +1042,44 @@ Dhcpv6Srv::appendRequestedVendorOptions(const Pkt6Ptr& question,
         return;
     }
 
+    uint32_t vendor_id = vendor_req->getVendorId();
+    std::vector<uint16_t> requested_opts;
+
     // Let's try to get ORO within that vendor-option
     /// @todo This is very specific to vendor-id=4491 (Cable Labs). Other vendors
     /// may have different policies.
     boost::shared_ptr<OptionUint16Array> oro =
         boost::dynamic_pointer_cast<OptionUint16Array>(vendor_req->getOption(DOCSIS3_V6_ORO));
-
-    // Option ORO not found. Don't do anything then.
-    if (!oro) {
-        return;
+    if (oro) {
+        requested_opts = oro->getValues();
+    }
+    // Iterate on the configured option list to add persistent options
+    for (CfgOptionList::const_iterator copts = co_list.begin();
+         copts != co_list.end(); ++copts) {
+        const OptionContainerPtr& opts = (*copts)->getAll(vendor_id);
+        if (!opts) {
+            continue;
+        }
+        // Get persistent options
+        const OptionContainerPersistIndex& idx = opts->get<2>();
+        const OptionContainerPersistRange& range = idx.equal_range(true);
+        for (OptionContainerPersistIndex::const_iterator desc = range.first;
+             desc != range.second; ++desc) {
+            // Add the persistent option code to requested options
+            requested_opts.push_back(desc->option_->getType());
+        }
     }
 
-    uint32_t vendor_id = vendor_req->getVendorId();
+    // If there is nothing to add don't do anything then.
+    if (requested_opts.empty()) {
+        return;
+    }
 
     boost::shared_ptr<OptionVendor> vendor_rsp(new OptionVendor(Option::V6, vendor_id));
 
     // Get the list of options that client requested.
     bool added = false;
-    const std::vector<uint16_t>& requested_opts = oro->getValues();
+
     BOOST_FOREACH(uint16_t opt, requested_opts) {
         for (CfgOptionList::const_iterator copts = co_list.begin();
              copts != co_list.end(); ++copts) {
@@ -993,7 +1147,7 @@ Dhcpv6Srv::sanityCheck(const Pkt6Ptr& pkt, RequirementLevel clientid,
 }
 
 Subnet6Ptr
-Dhcpv6Srv::selectSubnet(const Pkt6Ptr& question) {
+Dhcpv6Srv::selectSubnet(const Pkt6Ptr& question, bool& drop) {
     // Initialize subnet selector with the values used to select the subnet.
     SubnetSelector selector;
     selector.iface_name_ = question->getIface();
@@ -1053,7 +1207,14 @@ Dhcpv6Srv::selectSubnet(const Pkt6Ptr& question) {
             return (Subnet6Ptr());
         }
 
-        /// @todo: Add support for DROP status.
+        // Callouts decided to drop the packet. It is a superset of the
+        // skip case so no subnet will be selected.
+        if (callout_handle->getStatus() == CalloutHandle::NEXT_STEP_DROP) {
+            LOG_DEBUG(hooks_logger, DBG_DHCP6_HOOKS, DHCP6_HOOK_SUBNET6_SELECT_DROP)
+                .arg(question->getLabel());
+            drop = true;
+            return (Subnet6Ptr());
+        }
 
         // Use whatever subnet was specified by the callout
         callout_handle->getArgument("subnet6", subnet);
@@ -1081,6 +1242,8 @@ Dhcpv6Srv::selectSubnet(const Pkt6Ptr& question) {
 void
 Dhcpv6Srv::assignLeases(const Pkt6Ptr& question, Pkt6Ptr& answer,
                         AllocEngine::ClientContext6& ctx) {
+
+    Subnet6Ptr subnet = ctx.subnet_;
 
     // We need to allocate addresses for all IA_NA options in the client's
     // question (i.e. SOLICIT or REQUEST) message.
@@ -1119,6 +1282,20 @@ Dhcpv6Srv::assignLeases(const Pkt6Ptr& question, Pkt6Ptr& answer,
             break;
         }
     }
+
+    // Subnet may be modified by the allocation engine, if the initial subnet
+    // belongs to a shared network.
+    if (ctx.subnet_ && subnet && (subnet->getID() != ctx.subnet_->getID())) {
+        SharedNetwork6Ptr network;
+        subnet->getSharedNetwork(network);
+        if (network) {
+            LOG_DEBUG(packet6_logger, DBG_DHCP6_BASIC_DATA, DHCP6_SUBNET_DYNAMICALLY_CHANGED)
+                .arg(question->getLabel())
+                .arg(subnet->toText())
+                .arg(ctx.subnet_->toText())
+                .arg(network->getName());
+        }
+    }
 }
 
 
@@ -1148,8 +1325,8 @@ Dhcpv6Srv::processClientFqdn(const Pkt6Ptr& question, const Pkt6Ptr& answer,
         } else {
             // No FQDN so get the lease hostname from the host reservation if
             // there is one.
-            if (ctx.host_) {
-                ctx.hostname_ = ctx.host_->getHostname();
+            if (ctx.currentHost()) {
+                ctx.hostname_ = ctx.currentHost()->getHostname();
             }
 
             return;
@@ -1169,10 +1346,10 @@ Dhcpv6Srv::processClientFqdn(const Pkt6Ptr& question, const Pkt6Ptr& answer,
     d2_mgr.adjustFqdnFlags<Option6ClientFqdn>(*fqdn, *fqdn_resp);
 
     // If there's a reservation and it has a hostname specified, use it!
-    if (ctx.host_ && !ctx.host_->getHostname().empty()) {
+    if (ctx.currentHost() && !ctx.currentHost()->getHostname().empty()) {
         // Add the qualifying suffix.
         // After #3765, this will only occur if the suffix is not empty.
-        fqdn_resp->setDomainName(d2_mgr.qualifyName(ctx.host_->getHostname(),
+        fqdn_resp->setDomainName(d2_mgr.qualifyName(ctx.currentHost()->getHostname(),
                                                     true),
                                                     Option6ClientFqdn::FULL);
     } else {
@@ -1196,7 +1373,8 @@ Dhcpv6Srv::processClientFqdn(const Pkt6Ptr& question, const Pkt6Ptr& answer,
 }
 
 void
-Dhcpv6Srv::createNameChangeRequests(const Pkt6Ptr& answer) {
+Dhcpv6Srv::createNameChangeRequests(const Pkt6Ptr& answer,
+                                    AllocEngine::ClientContext6& ctx) {
     // Don't create NameChangeRequests if DNS updates are disabled.
     if (!CfgMgr::instance().ddnsEnabled()) {
         return;
@@ -1268,6 +1446,27 @@ Dhcpv6Srv::createNameChangeRequests(const Pkt6Ptr& answer) {
         if (!iaaddr) {
             continue;
         }
+
+        // If the lease for iaaddr is in the list of changed leases, we need
+        // to determine if the changes included changes to the FQDN. If there
+        // were  changes to the FQDN then we need to update DNS, otherwise
+        // we do not.
+        bool extended_only = false;
+        for (Lease6Collection::const_iterator l = ctx.currentIA().changed_leases_.begin();
+             l != ctx.currentIA().changed_leases_.end(); ++l) {
+            if ((*l)->addr_ == iaaddr->getAddress()) {
+                if ((*l)->hostname_ == opt_fqdn->getDomainName() &&
+                    (*l)->fqdn_fwd_ == do_fwd && (*l)->fqdn_rev_ == do_rev) {
+                    extended_only = true;
+                    break;
+                }
+            }
+        }
+
+        if (extended_only) {
+            continue;
+        }
+
         // Create new NameChangeRequest. Use the domain name from the FQDN.
         // This is an FQDN included in the response to the client, so it
         // holds a fully qualified domain-name already (not partial).
@@ -1514,6 +1713,8 @@ Dhcpv6Srv::assignIA_PD(const Pkt6Ptr& query, const Pkt6Ptr& answer,
         ia_rsp->setT1(subnet->getT1());
         ia_rsp->setT2(subnet->getT2());
 
+        const bool pd_exclude_requested = requestedInORO(query, D6O_PD_EXCLUDE);
+
         for (Lease6Collection::iterator l = leases.begin();
              l != leases.end(); ++l) {
 
@@ -1531,6 +1732,19 @@ Dhcpv6Srv::assignIA_PD(const Pkt6Ptr& query, const Pkt6Ptr& answer,
                                          (*l)->prefixlen_, (*l)->preferred_lft_,
                                          (*l)->valid_lft_));
             ia_rsp->addOption(addr);
+
+            if (pd_exclude_requested) {
+                // PD exclude option has been requested via ORO, thus we need to
+                // include it if the pool configuration specifies this option.
+                Pool6Ptr pool = boost::dynamic_pointer_cast<
+                    Pool6>(subnet->getPool(Lease::TYPE_PD, (*l)->addr_));
+                if (pool) {
+                    Option6PDExcludePtr pd_exclude_option = pool->getPrefixExcludeOption();
+                    if (pd_exclude_option) {
+                        addr->addOption(pd_exclude_option);
+                    }
+                }
+            }
         }
 
         // It would be possible to insert status code=0(success) as well,
@@ -1589,7 +1803,7 @@ Dhcpv6Srv::extendIA_NA(const Pkt6Ptr& query, const Pkt6Ptr& answer,
     ia_rsp->setT1(subnet->getT1());
     ia_rsp->setT2(subnet->getT2());
 
-    // Get DDNS udpate directions
+    // Get DDNS update directions
     bool do_fwd = false;
     bool do_rev = false;
     Option6ClientFqdnPtr fqdn = boost::dynamic_pointer_cast<
@@ -1660,9 +1874,15 @@ Dhcpv6Srv::extendIA_NA(const Pkt6Ptr& query, const Pkt6Ptr& answer,
     // For the leases that we just retired, send the addresses with 0 lifetimes.
     for (Lease6Collection::const_iterator l = ctx.currentIA().old_leases_.begin();
                                           l != ctx.currentIA().old_leases_.end(); ++l) {
-        Option6IAAddrPtr iaaddr(new Option6IAAddr(D6O_IAADDR,
-                                                  (*l)->addr_, 0, 0));
-        ia_rsp->addOption(iaaddr);
+
+        // Send an address with zero lifetimes only when this lease belonged to
+        // this client. Do not send it when we're reusing an old lease that belonged
+        // to someone else.
+        if (equalValues(query->getClientId(), (*l)->duid_)) {
+            Option6IAAddrPtr iaaddr(new Option6IAAddr(D6O_IAADDR,
+                                                      (*l)->addr_, 0, 0));
+            ia_rsp->addOption(iaaddr);
+        }
 
         // Now remove this address from the hints list.
         AllocEngine::ResourceType hint_type((*l)->addr_, 128);
@@ -1696,7 +1916,7 @@ Dhcpv6Srv::extendIA_NA(const Pkt6Ptr& query, const Pkt6Ptr& answer,
     // All is left is to insert the status code.
     if (leases.empty()) {
 
-        // The server wasn't able allocate new lease and renew an exising
+        // The server wasn't able allocate new lease and renew an existing
         // lease. In that case, the server sends NoAddrsAvail per RFC7550.
         ia_rsp->addOption(createStatusCode(*query, *ia_rsp,
                                            STATUS_NoAddrsAvail,
@@ -1799,33 +2019,67 @@ Dhcpv6Srv::extendIA_PD(const Pkt6Ptr& query,
     // into temporary container.
     AllocEngine::HintContainer hints = ctx.currentIA().hints_;
 
-    // For all the leases we have now, add the IAPPREFIX with non-zero lifetimes
+    const bool pd_exclude_requested = requestedInORO(query, D6O_PD_EXCLUDE);
+
+    // For all the leases we have now, add the IAPREFIX with non-zero lifetimes
     for (Lease6Collection::const_iterator l = leases.begin(); l != leases.end(); ++l) {
+
         Option6IAPrefixPtr prf(new Option6IAPrefix(D6O_IAPREFIX,
                                (*l)->addr_, (*l)->prefixlen_,
                                (*l)->preferred_lft_, (*l)->valid_lft_));
         ia_rsp->addOption(prf);
+
+
+        if (pd_exclude_requested) {
+            // PD exclude option has been requested via ORO, thus we need to
+            // include it if the pool configuration specifies this option.
+            Pool6Ptr pool = boost::dynamic_pointer_cast<
+                Pool6>(subnet->getPool(Lease::TYPE_PD, (*l)->addr_));
+
+            if (pool) {
+                Option6PDExcludePtr pd_exclude_option = pool->getPrefixExcludeOption();
+                if (pd_exclude_option) {
+                    prf->addOption(pd_exclude_option);
+                }
+            }
+        }
+
+
         LOG_INFO(lease6_logger, DHCP6_PD_LEASE_RENEW)
             .arg(query->getLabel())
             .arg((*l)->addr_.toText())
             .arg(static_cast<int>((*l)->prefixlen_))
             .arg(ia->getIAID());
 
-        // Now remove this address from the hints list.
+        // Now remove this prefix from the hints list.
         AllocEngine::ResourceType hint_type((*l)->addr_, (*l)->prefixlen_);
         hints.erase(std::remove(hints.begin(), hints.end(), hint_type),
                     hints.end());
     }
 
-    /// @todo: Maybe we should iterate over ctx.old_leases_, i.e. the leases
-    /// that used to be valid, but they are not anymore.
+    /// For the leases that we just retired, send the prefixes with 0 lifetimes.
+    for (Lease6Collection::const_iterator l = ctx.currentIA().old_leases_.begin();
+                                          l != ctx.currentIA().old_leases_.end(); ++l) {
 
-    // For all the leases the client had requested, but we didn't assign, put them with
-    // zero lifetimes
-    // Finally, if there are any addresses requested that we haven't dealt with
+        // Send a prefix with zero lifetimes only when this lease belonged to
+        // this client. Do not send it when we're reusing an old lease that belonged
+        // to someone else.
+        if (equalValues(query->getClientId(), (*l)->duid_)) {
+            Option6IAPrefixPtr prefix(new Option6IAPrefix(D6O_IAPREFIX, (*l)->addr_,
+                                                          (*l)->prefixlen_, 0, 0));
+            ia_rsp->addOption(prefix);
+        }
+
+        // Now remove this prefix from the hints list.
+        AllocEngine::ResourceType hint_type((*l)->addr_, (*l)->prefixlen_);
+        hints.erase(std::remove(hints.begin(), hints.end(), hint_type), hints.end());
+    }
+
+    // Finally, if there are any prefixes requested that we haven't dealt with
     // already, inform the client that he can't have them.
     for (AllocEngine::HintContainer::const_iterator prefix = hints.begin();
          prefix != hints.end(); ++prefix) {
+
         // Send the prefix with the zero lifetimes only if the prefix
         // contains non-zero value. A zero value indicates that the hint was
         // for the prefix length.
@@ -1839,7 +2093,7 @@ Dhcpv6Srv::extendIA_PD(const Pkt6Ptr& query,
     // All is left is to insert the status code.
     if (leases.empty()) {
 
-        // The server wasn't able allocate new lease and renew an exising
+        // The server wasn't able allocate new lease and renew an existing
         // lease. In that case, the server sends NoPrefixAvail per RFC7550.
         ia_rsp->addOption(createStatusCode(*query, *ia_rsp,
                                            STATUS_NoPrefixAvail,
@@ -2056,13 +2310,12 @@ Dhcpv6Srv::releaseIA_NA(const DuidPtr& duid, const Pkt6Ptr& query,
         // Callouts decided to skip the next processing step. The next
         // processing step would to send the packet, so skip at this
         // stage means "drop response".
-        if (callout_handle->getStatus() == CalloutHandle::NEXT_STEP_SKIP) {
+        if ((callout_handle->getStatus() == CalloutHandle::NEXT_STEP_SKIP) ||
+            (callout_handle->getStatus() == CalloutHandle::NEXT_STEP_DROP)) {
             skip = true;
             LOG_DEBUG(hooks_logger, DBG_DHCP6_HOOKS, DHCP6_HOOK_LEASE6_RELEASE_NA_SKIP)
                 .arg(query->getLabel());
         }
-
-        /// @todo: Add support for DROP status
     }
 
     // Ok, we've passed all checks. Let's release this address.
@@ -2272,7 +2525,13 @@ Dhcpv6Srv::processSolicit(const Pkt6Ptr& solicit) {
 
     // Let's create a simplified client context here.
     AllocEngine::ClientContext6 ctx;
-    initContext(solicit, ctx);
+    bool drop = false;
+    initContext(solicit, ctx, drop);
+
+    // Stop here if initContext decided to drop the packet.
+    if (drop) {
+        return (Pkt6Ptr());
+    }
 
     Pkt6Ptr response(new Pkt6(DHCPV6_ADVERTISE, solicit->getTransid()));
 
@@ -2291,6 +2550,11 @@ Dhcpv6Srv::processSolicit(const Pkt6Ptr& solicit) {
         }
     }
 
+    processClientFqdn(solicit, response, ctx);
+    assignLeases(solicit, response, ctx);
+
+    setReservedClientClasses(solicit, ctx);
+
     copyClientOptions(solicit, response);
     CfgOptionList co_list;
     buildCfgOptionList(solicit, ctx, co_list);
@@ -2298,13 +2562,12 @@ Dhcpv6Srv::processSolicit(const Pkt6Ptr& solicit) {
     appendRequestedOptions(solicit, response, co_list);
     appendRequestedVendorOptions(solicit, response, ctx, co_list);
 
-    processClientFqdn(solicit, response, ctx);
-    assignLeases(solicit, response, ctx);
+    updateReservedFqdn(ctx, response);
 
     // Only generate name change requests if sending a Reply as a result
     // of receiving Rapid Commit option.
     if (response->getType() == DHCPV6_REPLY) {
-        createNameChangeRequests(response);
+        createNameChangeRequests(response, ctx);
     }
 
     return (response);
@@ -2317,9 +2580,20 @@ Dhcpv6Srv::processRequest(const Pkt6Ptr& request) {
 
     // Let's create a simplified client context here.
     AllocEngine::ClientContext6 ctx;
-    initContext(request, ctx);
+    bool drop = false;
+    initContext(request, ctx, drop);
+
+    // Stop here if initContext decided to drop the packet.
+    if (drop) {
+        return (Pkt6Ptr());
+    }
 
     Pkt6Ptr reply(new Pkt6(DHCPV6_REPLY, request->getTransid()));
+
+    processClientFqdn(request, reply, ctx);
+    assignLeases(request, reply, ctx);
+
+    setReservedClientClasses(request, ctx);
 
     copyClientOptions(request, reply);
     CfgOptionList co_list;
@@ -2328,10 +2602,9 @@ Dhcpv6Srv::processRequest(const Pkt6Ptr& request) {
     appendRequestedOptions(request, reply, co_list);
     appendRequestedVendorOptions(request, reply, ctx, co_list);
 
-    processClientFqdn(request, reply, ctx);
-    assignLeases(request, reply, ctx);
+    updateReservedFqdn(ctx, reply);
     generateFqdn(reply);
-    createNameChangeRequests(reply);
+    createNameChangeRequests(reply, ctx);
 
     return (reply);
 }
@@ -2343,9 +2616,20 @@ Dhcpv6Srv::processRenew(const Pkt6Ptr& renew) {
 
     // Let's create a simplified client context here.
     AllocEngine::ClientContext6 ctx;
-    initContext(renew, ctx);
+    bool drop = false;
+    initContext(renew, ctx, drop);
+
+    // Stop here if initContext decided to drop the packet.
+    if (drop) {
+        return (Pkt6Ptr());
+    }
 
     Pkt6Ptr reply(new Pkt6(DHCPV6_REPLY, renew->getTransid()));
+
+    processClientFqdn(renew, reply, ctx);
+    extendLeases(renew, reply, ctx);
+
+    setReservedClientClasses(renew, ctx);
 
     copyClientOptions(renew, reply);
     CfgOptionList co_list;
@@ -2354,10 +2638,9 @@ Dhcpv6Srv::processRenew(const Pkt6Ptr& renew) {
     appendRequestedOptions(renew, reply, co_list);
     appendRequestedVendorOptions(renew, reply, ctx, co_list);
 
-    processClientFqdn(renew, reply, ctx);
-    extendLeases(renew, reply, ctx);
+    updateReservedFqdn(ctx, reply);
     generateFqdn(reply);
-    createNameChangeRequests(reply);
+    createNameChangeRequests(reply, ctx);
 
     return (reply);
 }
@@ -2369,9 +2652,20 @@ Dhcpv6Srv::processRebind(const Pkt6Ptr& rebind) {
 
     // Let's create a simplified client context here.
     AllocEngine::ClientContext6 ctx;
-    initContext(rebind, ctx);
+    bool drop = false;
+    initContext(rebind, ctx, drop);
+
+    // Stop here if initContext decided to drop the packet.
+    if (drop) {
+        return (Pkt6Ptr());
+    }
 
     Pkt6Ptr reply(new Pkt6(DHCPV6_REPLY, rebind->getTransid()));
+
+    processClientFqdn(rebind, reply, ctx);
+    extendLeases(rebind, reply, ctx);
+
+    setReservedClientClasses(rebind, ctx);
 
     copyClientOptions(rebind, reply);
     CfgOptionList co_list;
@@ -2380,10 +2674,9 @@ Dhcpv6Srv::processRebind(const Pkt6Ptr& rebind) {
     appendRequestedOptions(rebind, reply, co_list);
     appendRequestedVendorOptions(rebind, reply, ctx, co_list);
 
-    processClientFqdn(rebind, reply, ctx);
-    extendLeases(rebind, reply, ctx);
+    updateReservedFqdn(ctx, reply);
     generateFqdn(reply);
-    createNameChangeRequests(rebind);
+    createNameChangeRequests(reply, ctx);
 
     return (reply);
 }
@@ -2395,7 +2688,15 @@ Dhcpv6Srv::processConfirm(const Pkt6Ptr& confirm) {
 
     // Let's create a simplified client context here.
     AllocEngine::ClientContext6 ctx;
-    initContext(confirm, ctx);
+    bool drop = false;
+    initContext(confirm, ctx, drop);
+
+    // Stop here if initContext decided to drop the packet.
+    if (drop) {
+        return (Pkt6Ptr());
+    }
+
+    setReservedClientClasses(confirm, ctx);
 
     // Get IA_NAs from the Confirm. If there are none, the message is
     // invalid and must be discarded. There is nothing more to do.
@@ -2487,7 +2788,15 @@ Dhcpv6Srv::processRelease(const Pkt6Ptr& release) {
 
     // Let's create a simplified client context here.
     AllocEngine::ClientContext6 ctx;
-    initContext(release, ctx);
+    bool drop = false;
+    initContext(release, ctx, drop);
+
+    // Stop here if initContext decided to drop the packet.
+    if (drop) {
+        return (Pkt6Ptr());
+    }
+
+    setReservedClientClasses(release, ctx);
 
     Pkt6Ptr reply(new Pkt6(DHCPV6_REPLY, release->getTransid()));
 
@@ -2515,7 +2824,15 @@ Dhcpv6Srv::processDecline(const Pkt6Ptr& decline) {
 
     // Let's create a simplified client context here.
     AllocEngine::ClientContext6 ctx;
-    initContext(decline, ctx);
+    bool drop = false;
+    initContext(decline, ctx, drop);
+
+    // Stop here if initContext decided to drop the packet.
+    if (drop) {
+        return (Pkt6Ptr());
+    }
+
+    setReservedClientClasses(decline, ctx);
 
     // Copy client options (client-id, also relay information if present)
     copyClientOptions(decline, reply);
@@ -2542,7 +2859,7 @@ Dhcpv6Srv::declineLeases(const Pkt6Ptr& decline, Pkt6Ptr& reply,
                          AllocEngine::ClientContext6& ctx) {
 
     // We need to decline addresses for all IA_NA options in the client's
-    // RELEASE message.
+    // DECLINE message.
 
     // Let's set the status to be success by default. We can override it with
     // error status if needed. The important thing to understand here is that
@@ -2795,7 +3112,15 @@ Dhcpv6Srv::processInfRequest(const Pkt6Ptr& inf_request) {
 
     // Let's create a simplified client context here.
     AllocEngine::ClientContext6 ctx;
-    initContext(inf_request, ctx);
+    bool drop = false;
+    initContext(inf_request, ctx, drop);
+
+    // Stop here if initContext decided to drop the packet.
+    if (drop) {
+        return (Pkt6Ptr());
+    }
+
+    setReservedClientClasses(inf_request, ctx);
 
     // Create a Reply packet, with the same trans-id as the client's.
     Pkt6Ptr reply(new Pkt6(DHCPV6_REPLY, inf_request->getTransid()));
@@ -2815,7 +3140,7 @@ Dhcpv6Srv::processInfRequest(const Pkt6Ptr& inf_request) {
     // Try to assign options that were requested by the client.
     appendRequestedOptions(inf_request, reply, co_list);
 
-    // Try to assigne vendor options that were requested by the client.
+    // Try to assign vendor options that were requested by the client.
     appendRequestedVendorOptions(inf_request, reply, ctx, co_list);
 
     return (reply);
@@ -2884,7 +3209,7 @@ void Dhcpv6Srv::classifyPacket(const Pkt6Ptr& pkt) {
         // Evaluate the expression which can return false (no match),
         // true (match) or raise an exception (error)
         try {
-            bool status = evaluate(*expr_ptr, *pkt);
+            bool status = evaluateBool(*expr_ptr, *pkt);
             if (status) {
                 LOG_INFO(dhcp6_logger, EVAL_RESULT)
                     .arg(it->first)
@@ -2907,12 +3232,63 @@ void Dhcpv6Srv::classifyPacket(const Pkt6Ptr& pkt) {
                 .arg("get exception?");
         }
     }
+}
 
+void
+Dhcpv6Srv::setReservedClientClasses(const Pkt6Ptr& pkt,
+                                    const AllocEngine::ClientContext6& ctx) {
+    if (ctx.currentHost() && pkt) {
+        BOOST_FOREACH(const std::string& client_class,
+                      ctx.currentHost()->getClientClasses6()) {
+            pkt->addClass(client_class);
+        }
+    }
+
+    const ClientClasses& classes = pkt->getClasses();
     if (!classes.empty()) {
+        std::string joined_classes = boost::algorithm::join(classes, ", ");
         LOG_DEBUG(dhcp6_logger, DBG_DHCP6_BASIC, DHCP6_CLASS_ASSIGNED)
             .arg(pkt->getLabel())
-            .arg(classes);
+            .arg(joined_classes);
     }
+}
+
+void
+Dhcpv6Srv::updateReservedFqdn(const AllocEngine::ClientContext6& ctx,
+                              const Pkt6Ptr& answer) {
+    if (!answer) {
+        isc_throw(isc::Unexpected, "an instance of the object encapsulating"
+                  " a message must not be NULL when updating reserved FQDN");
+    }
+
+    Option6ClientFqdnPtr fqdn = boost::dynamic_pointer_cast<Option6ClientFqdn>
+        (answer->getOption(D6O_CLIENT_FQDN));
+
+   // If Client FQDN option is not included, there is nothing to do.
+   if (!fqdn) {
+       return;
+   }
+
+   std::string name = fqdn->getDomainName();
+
+   // If there is a host reservation for this client we have to check whether
+   // this reservation has the same hostname as the hostname currently
+   // present in the FQDN option. If not, it indicates that the allocation
+   // engine picked a different subnet (from within a shared network) for
+   // reservations and we have to send this new value to the client.
+   if (ctx.currentHost() &&
+       !ctx.currentHost()->getHostname().empty()) {
+       std::string new_name = CfgMgr::instance().getD2ClientMgr().
+           qualifyName(ctx.currentHost()->getHostname(), true);
+
+       if (new_name != name) {
+           fqdn->setDomainName(new_name, Option6ClientFqdn::FULL);
+
+           // Replace previous instance of Client FQDN option.
+           answer->delOption(D6O_CLIENT_FQDN);
+           answer->addOption(fqdn);
+       }
+   }
 }
 
 void
@@ -2978,6 +3354,9 @@ Dhcpv6Srv::generateFqdn(const Pkt6Ptr& answer) {
         }
         // Set the generated FQDN in the Client FQDN option.
         fqdn->setDomainName(generated_name, Option6ClientFqdn::FULL);
+
+       answer->delOption(D6O_CLIENT_FQDN);
+       answer->addOption(fqdn);
 
     } catch (const Exception& ex) {
         LOG_ERROR(ddns6_logger, DHCP6_DDNS_GENERATED_FQDN_UPDATE_FAIL)
@@ -3167,6 +3546,20 @@ void Dhcpv6Srv::processStatsSent(const Pkt6Ptr& response) {
 int Dhcpv6Srv::getHookIndexBuffer6Send() {
     return (Hooks.hook_index_buffer6_send_);
 }
+
+bool
+Dhcpv6Srv::requestedInORO(const Pkt6Ptr& query, const uint16_t code) const {
+    OptionUint16ArrayPtr oro =
+        boost::dynamic_pointer_cast<OptionUint16Array>(query->getOption(D6O_ORO));
+
+    if (oro) {
+        const std::vector<uint16_t>& codes = oro->getValues();
+        return (std::find(codes.begin(), codes.end(), code) != codes.end());
+    }
+
+    return (false);
+}
+
 
 };
 };

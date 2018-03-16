@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (C) 2014-2016 Internet Systems Consortium, Inc. ("ISC")
+# Copyright (C) 2014-2017 Internet Systems Consortium, Inc. ("ISC")
 #
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -38,7 +38,7 @@ mysql_lease_init_test() {
     # Let's wipe the whole database
     mysql_wipe
 
-    # Ok, now let's initalize the database
+    # Ok, now let's initialize the database
     ${keaadmin} lease-init mysql -u $db_user -p $db_password -n $db_name -d $db_scripts_dir
     ERRCODE=$?
 
@@ -50,35 +50,35 @@ mysql_lease_init_test() {
     SELECT version, minor FROM schema_version;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "schema_version table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "schema_version table is missing or broken. (expected status code %d, returned %d)"
 
     # Second table: lease4
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT address, hwaddr, client_id, valid_lifetime, expire, subnet_id, fqdn_fwd, fqdn_rev, hostname FROM lease4;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "lease4 table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "lease4 table is missing or broken. (expected status code %d, returned %d)"
 
     # Third table: lease6
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT address, duid, valid_lifetime, expire, subnet_id, pref_lifetime, lease_type, iaid, prefix_len, fqdn_fwd, fqdn_rev, hostname, hwaddr, hwtype, hwaddr_source FROM lease6;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "lease6 table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "lease6 table is missing or broken. (expected status code %d, returned %d)"
 
     # Fourth table: lease6_types
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT lease_type, name FROM lease6_types;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "lease6_types table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "lease6_types table is missing or broken. (expected status code %d, returned %d)"
 
     # Fifth table: lease_hwaddr_source
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT hwaddr_source, name FROM lease_hwaddr_source;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "lease_hwaddr_source table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "lease_hwaddr_source table is missing or broken. (expected status code %d, returned %d)"
 
     # Let's wipe the whole database
     mysql_wipe
@@ -117,7 +117,7 @@ mysql_host_reservation_init_test() {
     # Let's wipe the whole database
     mysql_wipe
 
-    # Ok, now let's initalize the database
+    # Ok, now let's initialize the database
     ${keaadmin} lease-init mysql -u $db_user -p $db_password -n $db_name -d $db_scripts_dir
     ERRCODE=$?
 
@@ -129,48 +129,48 @@ mysql_host_reservation_init_test() {
     SELECT version, minor FROM schema_version;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "schema_version table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "schema_version table is missing or broken. (expected status code %d, returned %d)"
 
     # Second table: hosts
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
-    SELECT host_id, dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, dhcp6_subnet_id, ipv4_address, hostname, dhcp4_client_classes, dhcp6_client_classes FROM hosts;
+    SELECT host_id, dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, dhcp6_subnet_id, ipv4_address, hostname, dhcp4_client_classes, dhcp6_client_classes, dhcp4_next_server, dhcp4_server_hostname, dhcp4_boot_file_name FROM hosts;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "hosts table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "hosts table is missing or broken. (expected status code %d, returned %d)"
 
     # Third table: ipv6_reservations
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT reservation_id, address, prefix_len, type, dhcp6_iaid, host_id FROM ipv6_reservations;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "ipv6_reservations table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "ipv6_reservations table is missing or broken. (expected status code %d, returned %d)"
 
     # Fourth table: dhcp4_options
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
-    SELECT option_id, code, value, formatted_value, space, persistent, dhcp_client_class, dhcp4_subnet_id, host_id FROM dhcp4_options;
+    SELECT option_id, code, value, formatted_value, space, persistent, dhcp_client_class, dhcp4_subnet_id, host_id, scope_id FROM dhcp4_options;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "dhcp4_options table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "dhcp4_options table is missing or broken. (expected status code %d, returned %d)"
 
     # Fifth table: dhcp6_options
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
-    SELECT option_id, code, value, formatted_value, space, persistent, dhcp_client_class, dhcp6_subnet_id, host_id FROM dhcp6_options;
+    SELECT option_id, code, value, formatted_value, space, persistent, dhcp_client_class, dhcp6_subnet_id, host_id, scope_id FROM dhcp6_options;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "dhcp6_options table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "dhcp6_options table is missing or broken. (expected status code %d, returned %d)"
 
     # Sixth table: host_identifier_type
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT type, name FROM host_identifier_type;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "host_identifier_type table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "host_identifier_type table is missing or broken. (expected status code %d, returned %d)"
     # Seventh table: dhcp_option_scope
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT scope_id, scope_name FROM dhcp_option_scope;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "dhcp_option_scope table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "dhcp_option_scope table is missing or broken. (expected status code %d, returned %d)"
 
     # Let's wipe the whole database
     mysql_wipe
@@ -193,8 +193,8 @@ mysql_upgrade_test() {
 
     assert_str_eq "1.0" ${version} "Expected kea-admin to return %s, returned value was %s"
 
-    # Ok, we have a 1.0 database. Let's upgrade it to 4.1
-    ${keaadmin} lease-upgrade mysql -u $db_user -p $db_password -n $db_name -d $db_scripts_dir 
+    # Ok, we have a 1.0 database. Let's upgrade it to 6.0
+    ${keaadmin} lease-upgrade mysql -u $db_user -p $db_password -n $db_name -d $db_scripts_dir
     ERRCODE=$?
 
     assert_eq 0 $ERRCODE "kea-admin lease-upgrade mysql returned non-zero status code %d, expected %d"
@@ -206,77 +206,77 @@ mysql_upgrade_test() {
     SELECT hwaddr, hwtype, hwaddr_source FROM lease6;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "lease6 table not upgraded to 2.0 (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "lease6 table not upgraded to 2.0 (expected status code %d, returned %d)"
 
     #table: lease_hwaddr_source (upgrade 1.0 -> 2.0)
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT hwaddr_source, name FROM lease_hwaddr_source;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "lease_hwaddr_source table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "lease_hwaddr_source table is missing or broken. (expected status code %d, returned %d)"
 
     #table: hosts (upgrade 2.0 -> 3.0)
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT host_id, dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, dhcp6_subnet_id, ipv4_address, hostname, dhcp4_client_classes, dhcp6_client_classes FROM hosts;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "hosts table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "hosts table is missing or broken. (expected status code %d, returned %d)"
 
     #table: ipv6_reservations (upgrade 2.0 -> 3.0)
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT reservation_id, address, prefix_len, type, dhcp6_iaid, host_id FROM ipv6_reservations;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "ipv6_reservations table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "ipv6_reservations table is missing or broken. (expected status code %d, returned %d)"
 
     #table: dhcp4_options (upgrade 2.0 -> 3.0)
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT option_id, code, value, formatted_value, space, persistent, dhcp_client_class, dhcp4_subnet_id, host_id FROM dhcp4_options;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "dhcp4_options table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "dhcp4_options table is missing or broken. (expected status code %d, returned %d)"
 
     #table: dhcp6_options (upgrade 2.0 -> 3.0)
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT option_id, code, value, formatted_value, space, persistent, dhcp_client_class, dhcp6_subnet_id, host_id FROM dhcp6_options;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "dhcp6_options table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "dhcp6_options table is missing or broken. (expected status code %d, returned %d)"
 
     #table: lease_state table added (upgrade 3.0 -> 4.0)
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT state,name from lease_state;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "dhcp6_options table is missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "dhcp6_options table is missing or broken. (expected status code %d, returned %d)"
 
     #table: state column added to lease4 (upgrade 3.0 -> 4.0)
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT state from lease4;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "lease4 is missing state column. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "lease4 is missing state column. (expected status code %d, returned %d)"
 
     #table: state column added to lease6 (upgrade 3.0 -> 4.0)
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     SELECT state from lease6;
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "lease6 is missing state column. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "lease6 is missing state column. (expected status code %d, returned %d)"
 
     #table: stored procedures for lease dumps added (upgrade 3.0 -> 4.0)
     mysql -u$db_user -p$db_password $db_name >/dev/null 2>&1 <<EOF
     call lease4DumpHeader(); call lease4DumpData(); call lease6DumpHeader(); call lease6DumpHeader();
 EOF
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "lease dump stored procedures are missing or broken. (returned status code %d, expected %d)"
+    assert_eq 0 $ERRCODE "lease dump stored procedures are missing or broken. (expected status code %d, returned %d)"
 
     #lease_hardware_source should have row for source = 0 (upgrade 4.0 -> 4.1)
     qry="select count(hwaddr_source) from lease_hwaddr_source where hwaddr_source = 0 and name='HWADDR_SOURCE_UNKNOWN';"
     count=`mysql_execute "${qry}"`
     ERRCODE=$?
-    assert_eq 0 $ERRCODE "select from lease_hwaddr_source failed. (returned status code %d, expected %d)"
-    assert_eq 1 "$count" "lease_hwaddr_source does not contain entry for HWADDR_SOURCE_UKNOWN. (record count %d, expected %d)"
+    assert_eq 0 $ERRCODE "select from lease_hwaddr_source failed. (expected status code %d, returned %d)"
+    assert_eq 1 "$count" "lease_hwaddr_source does not contain entry for HWADDR_SOURCE_UNKNOWN. (record count %d, expected %d)"
 
     # table: stored procedures for lease data dumps were modified (upgrade 4.0 -> 4.1)
     # verify  lease4DumpData has order by lease address
@@ -286,7 +286,7 @@ EOF
     assert_eq 0 $ERRCODE "procedure text fetch for lease4DumpData failed. (returned status code %d, expected %d)"
     count=`echo $text | grep -ic "order by l\.address"`
     assert_eq 1 $count "lease4DumpData doesn't have order by clause. (returned count %d, expected %d)"
-   
+
     # verify  lease6DumpData has order by lease address
     qry="show create procedure lease6DumpData"
     text=`mysql_execute "${qry}"`
@@ -295,10 +295,96 @@ EOF
     count=`echo $text | grep -ic "order by l\.address"`
     assert_eq 1 $count "lease6DumpData doesn't have order by clause. (returned count %d, expected %d)"
 
-    # Verify upgraded schemd reports version 4.1.
-    version=$(${keaadmin} lease-version mysql -u $db_user -p $db_password -n $db_name -d $db_scripts_dir) 
-    assert_str_eq "4.1" ${version} "Expected kea-admin to return %s, returned value was %s"
+    #table: host_identifier_type (upgrade 4.1 -> 5.0)
+    # verify that host_identifier_type table exists.
+    qry="select count(*) from host_identifier_type";
+    count=`mysql_execute "${qry}"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "select from host_identifier_type failed. (expected status code %d, returned %d)"
+    assert_eq 5 "$count" "host_identifier_type does not contain correct number of entries. (expected count %d, returned %d)"
 
+    # verify that foreign key fk_host_identifier_type exists
+    qry="show create table hosts";
+    text=`mysql_execute "${qry}"`
+    count=`echo $text | grep -ic -m 1 "fk_host_identifier_type"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "show create table hosts failed. (expected status code %d, returned %d)"
+    assert_eq 1 "$count" "show create table hosts did not return correct number of fk_host_identifier_type instances. (expected %d, returned %d)"
+
+    #table: dhcp_option_scope (upgrade 4.1 -> 5.0)
+    # verify that dhcp_option_scope table exists.
+    qry="select count(*) from dhcp_option_scope";
+    count=`mysql_execute "${qry}"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "select from dhcp_option_scope failed. (expected status code %d, returned %d)"
+    assert_eq 4 "$count" "dhcp_option_scope does not contain correct number of entries. (expected %d, returned %d)"
+
+    #table: scope_id columns to dhcp4_options (upgrade 4.1 -> 5.0) 
+    # verify that dhcp4_options table includes scope_id
+    qry="select scope_id from dhcp4_options";
+    count=`mysql_execute "${qry}"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "select scope_id from dhcp4_options failed. (expected status code %d, returned %d)"
+
+    #table: scope_id columns to dhcp6_options (upgrade 4.1 -> 5.0) 
+    # verify that dhcp6_options table includes scope_id
+    qry="select scope_id from dhcp6_options";
+    count=`mysql_execute "${qry}"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "select scope_id from dhcp6_options failed. (expected status code %d, returned %d)"
+
+    #table: DHCPv4 fixed field colums (upgrade 4.1 -> 5.0)
+    # verify that hosts table has columns holding values for DHCPv4 fixed fields
+    qry="select dhcp4_next_server, dhcp4_server_hostname, dhcp4_boot_file_name from hosts";
+    count=`mysql_execute "${qry}"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "select dhcp4_next_server, dhcp4_server_hostname, dhcp4_boot_file_name failed. (expected status code %d, returned %d)"
+
+    # verify that dhcp4_subnet_id is unsigned
+    qry="show columns from hosts like 'dhcp4_subnet_id'"
+    text=`mysql_execute "${qry}"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "show columns from hosts like 'dhcp4_subnet_id' failed. (expected status code %d, returned %d)"
+    count=`echo $text | grep -ic unsigned`
+    assert_eq $count 1 "dhcp4_subnet_id is not of unsigned type. (returned count %d, expected %d)"
+
+    # verify that dhcp6_subnet_id is unsigned
+    qry="show columns from hosts like 'dhcp6_subnet_id'"
+    text=`mysql_execute "${qry}"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "show columns from hosts like 'dhcp6_subnet_id' failed. (expected status code %d, returned %d)"
+    count=`echo $text | grep -ic unsigned`
+    assert_eq 1 $count "dhcp6_subnet_id is not of unsigned type. (expected count %d, returned %d)"
+
+    #host_identifier_type should have rows for types 3 and 4 (upgrade 5.0 -> 5.1)
+    qry="select count(*) from host_identifier_type";
+    count=`mysql_execute "${qry}"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "select from host_identifier_type failed. (expected status code %d, returned %d)"
+    assert_eq 5 "$count" "host_identifier_type does not contain correct number of entries. (expected count %d, returned %d)"
+    
+    #table: user_context columns to hosts, dhcp4_options and dhcp6_options (upgrade 5.2 -> 6.0)
+    # verify that hosts table includes user_context
+    qry="select user_context from hosts";
+    count=`mysql_execute "${qry}"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "select user_context from hosts failed. (expected status code %d, returned %d)"
+
+    # verify that dhcp4_options table includes user_context
+    qry="select user_context from dhcp4_options";
+    count=`mysql_execute "${qry}"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "select user_context from dhcp4_options failed. (expected status code %d, returned %d)"
+
+    # verify that dhcp6_options table includes user_context
+    qry="select user_context from dhcp6_options";
+    count=`mysql_execute "${qry}"`
+    ERRCODE=$?
+    assert_eq 0 $ERRCODE "select user_context from dhcp6_options failed. (expected status code %d, returned %d)"
+
+    # Verify upgraded schema reports version 6.0
+    version=$(${keaadmin} lease-version mysql -u $db_user -p $db_password -n $db_name -d $db_scripts_dir)
+    assert_str_eq "6.0" ${version} "Expected kea-admin to return %s, returned value was %s"
 
     # Let's wipe the whole database
     mysql_wipe
@@ -332,16 +418,16 @@ mysql_lease4_dump_test() {
     # Let's wipe the whole database
     mysql_wipe
 
-    # Ok, now let's initalize the database
+    # Ok, now let's initialize the database
     ${keaadmin} lease-init mysql -u $db_user -p $db_password -n $db_name -d $db_scripts_dir
     ERRCODE=$?
     assert_eq 0 $ERRCODE "could not create database, expected exit code %d, actual %d"
 
     # Insert the reference record
     insert_sql="\
-insert into lease4 values(10,20,30,40,\"2015-01-01 01:15:30\",50,1,1,\"one.example.com\", 0);\
-insert into lease4 values(11,NULL,123,40,\"2015-02-02 02:30:45\",50,1,1,\"\", 1);\
-insert into lease4 values(12,22,NULL,40,\"2015-03-03 11:01:07\",50,1,1,\"three.example.com\", 2);"
+insert into lease4 values(10,20,30,40,'2015-01-01 01:15:30',50,1,1,'one.example.com', 0);\
+insert into lease4 values(11,NULL,123,40,'2015-02-02 02:30:45',50,1,1,'', 1);\
+insert into lease4 values(12,22,NULL,40,'2015-03-03 11:01:07',50,1,1,'three.example.com', 2);"
 
     mysql_execute "$insert_sql"
     ERRCODE=$?
@@ -392,16 +478,16 @@ mysql_lease6_dump_test() {
     # Let's wipe the whole database
     mysql_wipe
 
-    # Ok, now let's initalize the database
+    # Ok, now let's initialize the database
     ${keaadmin} lease-init mysql -u $db_user -p $db_password -n $db_name -d $db_scripts_dir
     ERRCODE=$?
     assert_eq 0 $ERRCODE "could not create database, expected exit code %d, actual %d"
 
     # Insert the reference record
     insert_sql="\
-insert into lease6 values(10,20,30,\"2015-04-04 01:15:30\",40,50,1,60,70,1,1,\"one.example.com\",80,90,16,0);\
-insert into lease6 values(11,NULL,30,\"2015-05-05 02:30:45\",40,50,1,60,70,1,1,\"\",80,90,1,1);\
-insert into lease6 values(12,21,30,\"2015-06-06 11:01:07\",40,50,1,60,70,1,1,\"three.example.com\",80,90,4,2);"
+insert into lease6 values(10,20,30,'2015-04-04 01:15:30',40,50,1,60,70,1,1,'one.example.com',80,90,16,0);\
+insert into lease6 values(11,NULL,30,'2015-05-05 02:30:45',40,50,1,60,70,1,1,'',80,90,1,1);\
+insert into lease6 values(12,21,30,'2015-06-06 11:01:07',40,50,1,60,70,1,1,'three.example.com',80,90,4,2);"
 
     mysql_execute "$insert_sql"
     ERRCODE=$?

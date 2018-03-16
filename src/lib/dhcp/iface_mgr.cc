@@ -1,4 +1,4 @@
-// Copyright (C) 2011-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2011-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -68,7 +68,7 @@ Iface::closeSockets() {
 
 void
 Iface::closeSockets(const uint16_t family) {
-    // Check that the correect 'family' value has been specified.
+    // Check that the correct 'family' value has been specified.
     // The possible values are AF_INET or AF_INET6. Note that, in
     // the current code they are used to differentiate that the
     // socket is used to transmit IPv4 or IPv6 traffic. However,
@@ -134,7 +134,9 @@ void Iface::setMac(const uint8_t* mac, size_t len) {
                   << MAX_MAC_LEN);
     }
     mac_len_ = len;
-    memcpy(mac_, mac, len);
+    if (len > 0) {
+        memcpy(mac_, mac, len);
+    }
 }
 
 bool Iface::delAddress(const isc::asiolink::IOAddress& addr) {
@@ -170,7 +172,8 @@ IfaceMgr::IfaceMgr()
      control_buf_(new char[control_buf_len_]),
      packet_filter_(new PktFilterInet()),
      packet_filter6_(new PktFilterInet6()),
-     test_mode_(false)
+     test_mode_(false),
+     allow_loopback_(false)
 {
 
     try {
@@ -432,7 +435,7 @@ void IfaceMgr::stubDetectIfaces() {
     iface->flag_running_ = true;
 
     // Note that we claim that this is not a loopback. iface_mgr tries to open a
-    // socket on all interaces that are up, running and not loopback. As this is
+    // socket on all interfaces that are up, running and not loopback. As this is
     // the only interface we were able to detect, let's pretend this is a normal
     // interface.
     iface->flag_loopback_ = false;
@@ -463,7 +466,9 @@ IfaceMgr::openSockets4(const uint16_t port, const bool use_bcast,
             // that the interface configuration is valid and that the interface
             // is not a loopback interface. In both cases, we want to report
             // that the socket will not be opened.
-            if (iface->flag_loopback_) {
+            // Relax the check when the loopback interface was explicitely
+            // allowed
+            if (iface->flag_loopback_ && !allow_loopback_) {
                 IFACEMGR_ERROR(SocketConfigError, error_handler,
                                "must not open socket on the loopback"
                                " interface " << iface->getName());
@@ -568,7 +573,9 @@ IfaceMgr::openSockets6(const uint16_t port,
             // that the interface configuration is valid and that the interface
             // is not a loopback interface. In both cases, we want to report
             // that the socket will not be opened.
-            if (iface->flag_loopback_) {
+            // Relax the check when the loopback interface was explicitely
+            // allowed
+            if (iface->flag_loopback_ && !allow_loopback_) {
                 IFACEMGR_ERROR(SocketConfigError, error_handler,
                                "must not open socket on the loopback"
                                " interface " << iface->getName());
@@ -880,14 +887,13 @@ IfaceMgr::send(const Pkt4Ptr& pkt) {
 }
 
 
-boost::shared_ptr<Pkt4>
-IfaceMgr::receive4(uint32_t timeout_sec, uint32_t timeout_usec /* = 0 */) {
+Pkt4Ptr IfaceMgr::receive4(uint32_t timeout_sec, uint32_t timeout_usec /* = 0 */) {
     // Sanity check for microsecond timeout.
     if (timeout_usec >= 1000000) {
         isc_throw(BadValue, "fractional timeout must be shorter than"
                   " one million microseconds");
     }
-    const SocketInfo* candidate = 0;
+    boost::scoped_ptr<SocketInfo> candidate;
     IfacePtr iface;
     fd_set sockets;
     int maxfd = 0;
@@ -938,7 +944,7 @@ IfaceMgr::receive4(uint32_t timeout_sec, uint32_t timeout_usec /* = 0 */) {
     } else if (result < 0) {
         // In most cases we would like to know whether select() returned
         // an error because of a signal being received  or for some other
-        // reasaon. This is because DHCP servers use signals to trigger
+        // reason. This is because DHCP servers use signals to trigger
         // certain actions, like reconfiguration or graceful shutdown.
         // By catching a dedicated exception the caller will know if the
         // error returned by the function is due to the reception of the
@@ -972,7 +978,7 @@ IfaceMgr::receive4(uint32_t timeout_sec, uint32_t timeout_usec /* = 0 */) {
     BOOST_FOREACH(iface, ifaces_) {
         BOOST_FOREACH(SocketInfo s, iface->getSockets()) {
             if (FD_ISSET(s.sockfd_, &sockets)) {
-                candidate = &(s);
+                candidate.reset(new SocketInfo(s));
                 break;
             }
         }
@@ -997,7 +1003,7 @@ Pkt6Ptr IfaceMgr::receive6(uint32_t timeout_sec, uint32_t timeout_usec /* = 0 */
                   " one million microseconds");
     }
 
-    const SocketInfo* candidate = 0;
+    boost::scoped_ptr<SocketInfo> candidate;
     fd_set sockets;
     int maxfd = 0;
 
@@ -1048,7 +1054,7 @@ Pkt6Ptr IfaceMgr::receive6(uint32_t timeout_sec, uint32_t timeout_usec /* = 0 */
     } else if (result < 0) {
         // In most cases we would like to know whether select() returned
         // an error because of a signal being received  or for some other
-        // reasaon. This is because DHCP servers use signals to trigger
+        // reason. This is because DHCP servers use signals to trigger
         // certain actions, like reconfiguration or graceful shutdown.
         // By catching a dedicated exception the caller will know if the
         // error returned by the function is due to the reception of the
@@ -1082,7 +1088,7 @@ Pkt6Ptr IfaceMgr::receive6(uint32_t timeout_sec, uint32_t timeout_usec /* = 0 */
     BOOST_FOREACH(IfacePtr iface, ifaces_) {
         BOOST_FOREACH(SocketInfo s, iface->getSockets()) {
             if (FD_ISSET(s.sockfd_, &sockets)) {
-                candidate = &(s);
+                candidate.reset(new SocketInfo(s));
                 break;
             }
         }
@@ -1162,7 +1168,7 @@ IfaceMgr::getSocket(isc::dhcp::Pkt4 const& pkt) {
     }
 
     const Iface::SocketCollection& socket_collection = iface->getSockets();
-    // A candidate being an end of the iterator marks that it is a begining of
+    // A candidate being an end of the iterator marks that it is a beginning of
     // the socket search and that the candidate needs to be set to the first
     // socket found.
     Iface::SocketCollection::const_iterator candidate = socket_collection.end();

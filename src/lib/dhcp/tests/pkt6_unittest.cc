@@ -1,4 +1,4 @@
-// Copyright (C) 2011-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2011-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -23,6 +23,7 @@
 #include <boost/bind.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/scoped_ptr.hpp>
+#include <boost/pointer_cast.hpp>
 #include <util/encode/hex.h>
 #include <gtest/gtest.h>
 
@@ -145,8 +146,7 @@ TEST_F(Pkt6Test, constructor) {
 /// but we spent some time to make is less ugly than it used to be.
 ///
 /// @return pointer to Pkt6 that represents received SOLICIT
-Pkt6* capture1() {
-    Pkt6* pkt;
+Pkt6Ptr capture1() {
     uint8_t data[98];
     data[0]  = 1;
     data[1]  = 1;       data[2]  = 2;     data[3] = 3;      data[4]  = 0;
@@ -175,7 +175,7 @@ Pkt6* capture1() {
     data[93] = 6;       data[94] = 0;     data[95] = 2;     data[96] = 0;
     data[97] = 23;
 
-    pkt = new Pkt6(data, sizeof(data));
+    Pkt6Ptr pkt(new Pkt6(data, sizeof(data)));
     pkt->setRemotePort(546);
     pkt->setRemoteAddr(IOAddress("fe80::21e:8cff:fe9b:7349"));
     pkt->setLocalPort(0);
@@ -220,7 +220,7 @@ Pkt6* capture1() {
 /// The original capture was posted to dibbler users mailing list.
 ///
 /// @return created double relayed SOLICIT message
-Pkt6* capture2() {
+Pkt6Ptr capture2() {
 
     // string exported from Wireshark
     string hex_string =
@@ -238,18 +238,18 @@ Pkt6* capture2() {
     // to be OptionBuffer format)
     isc::util::encode::decodeHex(hex_string, bin);
 
-    NakedPkt6* pkt = new NakedPkt6(&bin[0], bin.size());
+    NakedPkt6Ptr pkt(new NakedPkt6(&bin[0], bin.size()));
     pkt->setRemotePort(547);
     pkt->setRemoteAddr(IOAddress("fe80::1234"));
     pkt->setLocalPort(547);
     pkt->setLocalAddr(IOAddress("ff05::1:3"));
     pkt->setIndex(2);
     pkt->setIface("eth0");
-    return (dynamic_cast<Pkt6*>(pkt));
+    return (boost::dynamic_pointer_cast<Pkt6>(pkt));
 }
 
 TEST_F(Pkt6Test, unpack_solicit1) {
-    scoped_ptr<Pkt6> sol(capture1());
+    Pkt6Ptr sol(capture1());
 
     ASSERT_NO_THROW(sol->unpack());
 
@@ -294,7 +294,7 @@ TEST_F(Pkt6Test, packUnpack) {
 TEST_F(Pkt6Test, unpackMalformed) {
     // Get a packet. We're really interested in its on-wire
     // representation only.
-    scoped_ptr<Pkt6> donor(capture1());
+    Pkt6Ptr donor(capture1());
 
     // That's our original content. It should be sane.
     OptionBuffer orig = donor->data_;
@@ -367,7 +367,7 @@ TEST_F(Pkt6Test, unpackMalformed) {
 TEST_F(Pkt6Test, unpackVendorMalformed) {
     // Get a packet. We're really interested in its on-wire
     // representation only.
-    scoped_ptr<Pkt6> donor(capture1());
+    Pkt6Ptr donor(capture1());
 
     // Add a vendor option
     OptionBuffer orig = donor->data_;
@@ -410,14 +410,14 @@ TEST_F(Pkt6Test, unpackVendorMalformed) {
     shorth.resize(orig.size() - 4);
     shorth[len_index] = 12;
     Pkt6Ptr too_short_header_pkt(new Pkt6(&shorth[0], shorth.size()));
-    EXPECT_THROW(too_short_header_pkt->unpack(), OutOfRange);
+    EXPECT_THROW(too_short_header_pkt->unpack(), SkipRemainingOptionsError);
 
     // Truncated option data is not accepted
     vector<uint8_t> shorto = orig;
     shorto.resize(orig.size() - 2);
     shorto[len_index] = 16;
     Pkt6Ptr too_short_option_pkt(new Pkt6(&shorto[0], shorto.size()));
-    EXPECT_THROW(too_short_option_pkt->unpack(), OutOfRange);
+    EXPECT_THROW(too_short_option_pkt->unpack(), SkipRemainingOptionsError);
 }
 
 // This test verifies that options can be added (addOption()), retrieved
@@ -680,7 +680,7 @@ TEST_F(Pkt6Test, getName) {
 // relays can be parsed properly. See capture2() method description
 // for details regarding the packet.
 TEST_F(Pkt6Test, relayUnpack) {
-    boost::scoped_ptr<Pkt6> msg(capture2());
+    Pkt6Ptr msg(capture2());
 
     EXPECT_NO_THROW(msg->unpack());
 
@@ -870,7 +870,7 @@ TEST_F(Pkt6Test, relayPack) {
 }
 
 TEST_F(Pkt6Test, getRelayOption) {
-    NakedPkt6Ptr msg(dynamic_cast<NakedPkt6*>(capture2()));
+    NakedPkt6Ptr msg(boost::dynamic_pointer_cast<NakedPkt6>(capture2()));
     ASSERT_TRUE(msg);
 
     ASSERT_NO_THROW(msg->unpack());
@@ -986,7 +986,7 @@ TEST_F(Pkt6Test, getAnyRelayOption) {
     EXPECT_TRUE(opt->equals(relay3_opt1));
     EXPECT_FALSE(opt == relay3_opt1);
     // Test that option copy has replaced the original option within the
-    // packet. We achive that by calling a variant of the method which
+    // packet. We achieve that by calling a variant of the method which
     // retrieved non-copied option.
     relay3_opt1 = msg->getNonCopiedAnyRelayOption(200, Pkt6::RELAY_SEARCH_FROM_CLIENT);
     ASSERT_TRUE(relay3_opt1);
@@ -1049,6 +1049,38 @@ TEST_F(Pkt6Test, getAnyRelayOption) {
     EXPECT_FALSE(opt);
 }
 
+// Tests whether Pkt6::toText() properly prints out all parameters, including
+// relay options: remote-id, interface-id.
+TEST_F(Pkt6Test, toText) {
+
+    // This packet contains doubly relayed solicit. The inner-most
+    // relay-forward contains interface-id and remote-id. We will
+    // check that these are printed correctly.
+    Pkt6Ptr msg(capture2());
+    EXPECT_NO_THROW(msg->unpack());
+
+    ASSERT_EQ(2, msg->relay_info_.size());
+
+    string expected =
+        "localAddr=[ff05::1:3]:547 remoteAddr=[fe80::1234]:547\n"
+        "msgtype=1(SOLICIT), transid=0x6b4fe2\n"
+        "type=00001, len=00014: 00:01:00:01:18:b0:33:41:00:00:21:5c:18:a9\n"
+        "type=00003(IA_NA), len=00012: iaid=1, t1=4294967295, t2=4294967295\n"
+        "type=00006, len=00006: 23(uint16) 242(uint16) 243(uint16)\n"
+        "type=00008, len=00002: 0 (uint16)\n"
+        "2 relay(s):\n"
+        "relay[0]: msg-type=12(RELAY_FORWARD), hop-count=1,\n"
+        "link-address=2001:888:db8:1::, peer-address=fe80::200:21ff:fe5c:18a9, 2 option(s)\n"
+        "type=00018, len=00028: 49:53:41:4d:31:34:34:7c:32:39:39:7c:69:70:76:36:7c:6e:74:3a:76:70:3a:31:3a:31:31:30\n"
+        "type=00037, len=00018: 6527 (uint32) 0001000118B033410000215C18A9 (binary)\n"
+        "relay[1]: msg-type=12(RELAY_FORWARD), hop-count=0,\n"
+        "link-address=::, peer-address=fe80::200:21ff:fe5c:18a9, 2 option(s)\n"
+        "type=00018, len=00021: 49:53:41:4d:31:34:34:20:65:74:68:20:31:2f:31:2f:30:35:2f:30:31\n"
+        "type=00037, len=00004: 3561 (uint32)  (binary)\n";
+
+    EXPECT_EQ(expected, msg->toText());
+}
+
 // Tests whether a packet can be assigned to a class and later
 // checked if it belongs to a given class
 TEST_F(Pkt6Test, clientClasses) {
@@ -1084,7 +1116,7 @@ TEST_F(Pkt6Test, clientClasses) {
 TEST_F(Pkt6Test, getMAC) {
     Pkt6 pkt(DHCPV6_ADVERTISE, 1234);
 
-    // DHCPv6 packet by default doens't have MAC address specified.
+    // DHCPv6 packet by default doesn't have MAC address specified.
     EXPECT_FALSE(pkt.getMAC(HWAddr::HWADDR_SOURCE_ANY));
     EXPECT_FALSE(pkt.getMAC(HWAddr::HWADDR_SOURCE_RAW));
 
@@ -1578,7 +1610,7 @@ TEST_F(Pkt6Test, getClientId) {
     EXPECT_TRUE(duid->getDuid() == duid_vec);
 }
 
-// This test verfies that it is possible to obtain the packet
+// This test verifies that it is possible to obtain the packet
 // identifiers (DUID, HW Address, transaction id) in the textual
 // format.
 TEST_F(Pkt6Test, makeLabel) {
@@ -1657,9 +1689,41 @@ TEST_F(Pkt6Test, getLabelEmptyClientId) {
     // Create a packet.
     Pkt6 pkt(DHCPV6_SOLICIT, 0x2312);
 
-    // Add empty client idenitifier option.
+    // Add empty client identifier option.
     pkt.addOption(OptionPtr(new Option(Option::V6, D6O_CLIENTID)));
     EXPECT_EQ("duid=[no info], tid=0x2312", pkt.getLabel());
+}
+
+// Verifies that when the VIVSO, 17, has length that is too
+// short (i.e. less than sizeof(uint8_t), unpack throws a
+// SkipRemainingOptionsError exception
+TEST_F(Pkt6Test, truncatedVendorLength) {
+
+    // Build a good Solicit packet
+    Pkt6Ptr pkt = test::PktCaptures::captureSolicitWithVIVSO();
+
+    // Unpacking should not throw
+    ASSERT_NO_THROW(pkt->unpack());
+    ASSERT_EQ(DHCPV6_SOLICIT, pkt->getType());
+
+    // VIVSO option should be there
+    OptionPtr x = pkt->getOption(D6O_VENDOR_OPTS);
+    ASSERT_TRUE(x);
+    ASSERT_EQ(D6O_VENDOR_OPTS, x->getType());
+    OptionVendorPtr vivso = boost::dynamic_pointer_cast<OptionVendor>(x);
+    ASSERT_TRUE(vivso);
+    EXPECT_EQ(8, vivso->len()); // data + opt code + len
+
+    // Build a bad Solicit packet
+    pkt = test::PktCaptures::captureSolicitWithTruncatedVIVSO();
+
+    // Unpack should throw Skip exception
+    ASSERT_THROW(pkt->unpack(), SkipRemainingOptionsError);
+    ASSERT_EQ(DHCPV6_SOLICIT, pkt->getType());
+
+    // VIVSO option should not be there
+    x = pkt->getOption(D6O_VENDOR_OPTS);
+    ASSERT_FALSE(x);
 }
 
 }

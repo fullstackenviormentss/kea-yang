@@ -4,6 +4,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+#include <config.h>
+
 #include <asiolink/io_address.h>
 #include <dhcp/option4_addrlst.h>
 #include <exceptions/exceptions.h>
@@ -77,7 +79,7 @@ Option4AddrLst::pack(isc::util::OutputBuffer& buf) const {
     AddressContainer::const_iterator addr = addrs_.begin();
 
     while (addr != addrs_.end()) {
-        buf.writeUint32(*addr);
+        buf.writeUint32(addr->toUint32());
         ++addr;
     }
 }

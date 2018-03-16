@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2015-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -14,6 +14,7 @@
 #include <dhcpsrv/mysql_host_data_source.h>
 #include <dhcpsrv/tests/generic_host_data_source_unittest.h>
 #include <dhcpsrv/testutils/mysql_schema.h>
+#include <dhcpsrv/testutils/host_data_source_utils.h>
 #include <dhcpsrv/host_data_source_factory.h>
 
 #include <gtest/gtest.h>
@@ -28,17 +29,15 @@ using namespace isc;
 using namespace isc::asiolink;
 using namespace isc::dhcp;
 using namespace isc::dhcp::test;
+using namespace isc::data;
 using namespace std;
 
 namespace {
 
 class MySqlHostDataSourceTest : public GenericHostDataSourceTest {
 public:
-    /// @brief Constructor
-    ///
-    /// Deletes everything from the database and opens it.
-    MySqlHostDataSourceTest() {
-
+    /// @brief Clears the database and opens connection to it.
+    void initializeTest() {
         // Ensure schema is the correct one.
         destroyMySQLSchema();
         createMySQLSchema();
@@ -58,14 +57,30 @@ public:
         hdsptr_ = HostDataSourceFactory::getHostDataSourcePtr();
     }
 
-    /// @brief Destructor
-    ///
-    /// Rolls back all pending transactions.  The deletion of myhdsptr_ will close
-    /// the database.  Then reopen it and delete everything created by the test.
-    virtual ~MySqlHostDataSourceTest() {
-        hdsptr_->rollback();
+    /// @brief Destroys the HDS and the schema.
+    void destroyTest() {
+        try {
+            hdsptr_->rollback();
+        } catch (...) {
+            // Rollback may fail if backend is in read only mode. That's ok.
+        }
         HostDataSourceFactory::destroy();
         destroyMySQLSchema();
+    }
+
+    /// @brief Constructor
+    ///
+    /// Deletes everything from the database and opens it.
+    MySqlHostDataSourceTest() {
+        initializeTest();
+    }
+
+    /// @brief Destructor
+    ///
+    /// Rolls back all pending transactions.  The deletion of hdsptr_ will close
+    /// the database.  Then reopen it and delete everything created by the test.
+    virtual ~MySqlHostDataSourceTest() {
+        destroyTest();
     }
 
     /// @brief Reopen the database
@@ -79,6 +94,51 @@ public:
         HostDataSourceFactory::destroy();
         HostDataSourceFactory::create(validMySQLConnectionString());
         hdsptr_ = HostDataSourceFactory::getHostDataSourcePtr();
+    }
+
+    /// @brief returns number of rows in a table
+    ///
+    /// Note: This method uses its own connection. It will not work if your test
+    /// uses transactions.
+    ///
+    /// @param name of the table
+    /// @return number of rows currently present in the table
+    int countRowsInTable(const std::string& table) {
+        string query = "SELECT * FROM " + table;
+
+        MySqlConnection::ParameterMap params;
+        params["name"] = "keatest";
+        params["user"] = "keatest";
+        params["password"] = "keatest";
+
+        MySqlConnection conn(params);
+        conn.openDatabase();
+
+        int status = mysql_query(conn.mysql_, query.c_str());
+        if (status !=0) {
+            isc_throw(DbOperationError, "Query failed: " << mysql_error(conn.mysql_));
+        }
+
+        MYSQL_RES * res = mysql_store_result(conn.mysql_);
+        int numrows = static_cast<int>(mysql_num_rows(res));
+        mysql_free_result(res);
+
+        return (numrows);
+    }
+
+    /// @brief Returns number of IPv4 options currently stored in DB.
+    virtual int countDBOptions4() {
+        return (countRowsInTable("dhcp4_options"));
+    }
+
+    /// @brief Returns number of IPv6 options currently stored in DB.
+    virtual int countDBOptions6() {
+        return (countRowsInTable("dhcp6_options"));
+    }
+
+    /// @brief Returns number of IPv6 reservations currently stored in DB.
+    virtual int countDBReservations6() {
+        return (countRowsInTable("ipv6_reservations"));
     }
 
 };
@@ -124,12 +184,12 @@ TEST(MySqlHostDataSource, OpenDatabase) {
                << "*** before the MySQL tests will run correctly.\n";
     }
 
-    // Check that attempting to get an instance of the lease manager when
+    // Check that attempting to get an instance of the host data source when
     // none is set throws an exception.
     EXPECT_FALSE(HostDataSourceFactory::getHostDataSourcePtr());
 
     // Check that wrong specification of backend throws an exception.
-    // (This is really a check on LeaseMgrFactory, but is convenient to
+    // (This is really a check on HostDataSourceFactory, but is convenient to
     // perform here.)
     EXPECT_THROW(HostDataSourceFactory::create(connectionString(
         NULL, VALID_NAME, VALID_HOST, INVALID_USER, VALID_PASSWORD)),
@@ -157,6 +217,9 @@ TEST(MySqlHostDataSource, OpenDatabase) {
     EXPECT_THROW(HostDataSourceFactory::create(connectionString(
         MYSQL_VALID_TYPE, VALID_NAME, VALID_HOST, VALID_USER, VALID_PASSWORD, INVALID_TIMEOUT_2)),
         DbInvalidTimeout);
+    EXPECT_THROW(HostDataSourceFactory::create(connectionString(
+        MYSQL_VALID_TYPE, VALID_NAME, VALID_HOST, VALID_USER, VALID_PASSWORD,
+        VALID_TIMEOUT, INVALID_READONLY_DB)), DbInvalidReadOnly);
 
     // Check for missing parameters
     EXPECT_THROW(HostDataSourceFactory::create(connectionString(
@@ -208,10 +271,27 @@ TEST(MySqlConnection, checkTimeConversion) {
     EXPECT_EQ(cltt, converted_cltt);
 }
 
+// This test verifies that database backend can operate in Read-Only mode.
+TEST_F(MySqlHostDataSourceTest, testReadOnlyDatabase) {
+    testReadOnlyDatabase(MYSQL_VALID_TYPE);
+}
+
 // Test verifies if a host reservation can be added and later retrieved by IPv4
 // address. Host uses hw address as identifier.
 TEST_F(MySqlHostDataSourceTest, basic4HWAddr) {
     testBasic4(Host::IDENT_HWADDR);
+}
+
+// Verifies that IPv4 host reservation with options can have a max value
+// for  dhcp4_subnet id
+TEST_F(MySqlHostDataSourceTest, maxSubnetId4) {
+    testMaxSubnetId4();
+}
+
+// Verifies that IPv6 host reservation with options can have a max value
+// for  dhcp6_subnet id
+TEST_F(MySqlHostDataSourceTest, maxSubnetId6) {
+    testMaxSubnetId6();
 }
 
 // Test verifies if a host reservation can be added and later retrieved by IPv4
@@ -250,6 +330,12 @@ TEST_F(MySqlHostDataSourceTest, get4ByCircuitId) {
     testGet4ByIdentifier(Host::IDENT_CIRCUIT_ID);
 }
 
+// Test verifies if a host reservation can be added and later retrieved by
+// client-id.
+TEST_F(MySqlHostDataSourceTest, get4ByClientId) {
+    testGet4ByIdentifier(Host::IDENT_CLIENT_ID);
+}
+
 // Test verifies if hardware address and client identifier are not confused.
 TEST_F(MySqlHostDataSourceTest, hwaddrNotClientId1) {
     testHWAddrNotClientId();
@@ -275,6 +361,12 @@ TEST_F(MySqlHostDataSourceTest, hostnameFQDN100) {
 // retrieved.
 TEST_F(MySqlHostDataSourceTest, noHostname) {
     testHostname("", 1);
+}
+
+// Test verifies if a host with user context can be stored and later retrieved.
+TEST_F(MySqlHostDataSourceTest, usercontext) {
+    string comment = "{ \"comment\": \"a host reservation\" }";
+    testUserContext(Element::fromJSON(comment));
 }
 
 // Test verifies if the hardware or client-id query can match hardware address.
@@ -321,6 +413,12 @@ TEST_F(MySqlHostDataSourceTest, get6PrefixWithHWaddr) {
     testGetByIPv6(Host::IDENT_HWADDR, true);
 }
 
+// Test verifies that host with IPv6 prefix reservation can be retrieved
+// by subnet id and prefix value.
+TEST_F(MySqlHostDataSourceTest, get6SubnetPrefix) {
+    testGetBySubnetIPv6();
+}
+
 // Test verifies if a host reservation can be added and later retrieved by
 // hardware address.
 TEST_F(MySqlHostDataSourceTest, get6ByHWaddr) {
@@ -351,29 +449,22 @@ TEST_F(MySqlHostDataSourceTest, multipleReservationsDifferentOrder){
     testMultipleReservationsDifferentOrder();
 }
 
-// Test verifies if multiple client classes for IPv4 can be stored.
-TEST_F(MySqlHostDataSourceTest, DISABLED_multipleClientClasses4) {
-    /// @todo: Implement this test as part of #4213.
-
-    /// Add host reservation with a multiple v4 client-classes, retrieve it and
-    /// make sure that all client classes are retrieved properly.
+// Test that multiple client classes for IPv4 can be inserted and
+// retrieved for a given host reservation.
+TEST_F(MySqlHostDataSourceTest, multipleClientClasses4) {
+    testMultipleClientClasses4();
 }
 
-// Test verifies if multiple client classes for IPv6 can be stored.
-TEST_F(MySqlHostDataSourceTest, DISABLED_multipleClientClasses6) {
-    /// @todo: Implement this test as part of #4213.
-
-    /// Add host reservation with a multiple v6 client-classes, retrieve it and
-    /// make sure that all client classes are retrieved properly.
+// Test that multiple client classes for IPv6 can be inserted and
+// retrieved for a given host reservation.
+TEST_F(MySqlHostDataSourceTest, multipleClientClasses6) {
+    testMultipleClientClasses6();
 }
 
-// Test verifies if multiple client classes for both IPv4 and IPv6 can be stored.
-TEST_F(MySqlHostDataSourceTest, DISABLED_multipleClientClassesBoth) {
-    /// @todo: Implement this test as part of #4213.
-
-    /// Add host reservation with a multiple v4 and v6 client-classes, retrieve
-    /// it and make sure that all client classes are retrieved properly. Also,
-    /// check that the classes are not confused.
+// Test that multiple client classes for both IPv4 and IPv6 can
+// be inserted and retrieved for a given host reservation.
+TEST_F(MySqlHostDataSourceTest, multipleClientClassesBoth) {
+    testMultipleClientClassesBoth();
 }
 
 // Test if the same host can have reservations in different subnets (with the
@@ -430,13 +521,15 @@ TEST_F(MySqlHostDataSourceTest, addDuplicate4) {
 // This test verifies that DHCPv4 options can be inserted in a binary format
 /// and retrieved from the MySQL host database.
 TEST_F(MySqlHostDataSourceTest, optionsReservations4) {
-    testOptionsReservations4(false);
+    string comment = "{ \"comment\": \"a host reservation\" }";
+    testOptionsReservations4(false, Element::fromJSON(comment));
 }
 
 // This test verifies that DHCPv6 options can be inserted in a binary format
 /// and retrieved from the MySQL host database.
 TEST_F(MySqlHostDataSourceTest, optionsReservations6) {
-    testOptionsReservations6(false);
+    string comment = "{ \"comment\": \"a host reservation\" }";
+    testOptionsReservations6(false, Element::fromJSON(comment));
 }
 
 // This test verifies that DHCPv4 and DHCPv6 options can be inserted in a
@@ -448,13 +541,15 @@ TEST_F(MySqlHostDataSourceTest, optionsReservations46) {
 // This test verifies that DHCPv4 options can be inserted in a textual format
 /// and retrieved from the MySQL host database.
 TEST_F(MySqlHostDataSourceTest, formattedOptionsReservations4) {
-    testOptionsReservations4(true);
+    string comment = "{ \"comment\": \"a host reservation\" }";
+    testOptionsReservations4(true, Element::fromJSON(comment));
 }
 
 // This test verifies that DHCPv6 options can be inserted in a textual format
 /// and retrieved from the MySQL host database.
 TEST_F(MySqlHostDataSourceTest, formattedOptionsReservations6) {
-    testOptionsReservations6(true);
+    string comment = "{ \"comment\": \"a host reservation\" }";
+    testOptionsReservations6(true, Element::fromJSON(comment));
 }
 
 // This test verifies that DHCPv4 and DHCPv6 options can be inserted in a
@@ -482,12 +577,13 @@ TEST_F(MySqlHostDataSourceTest, testAddRollback) {
     params["password"] = "keatest";
     MySqlConnection conn(params);
     ASSERT_NO_THROW(conn.openDatabase());
+
     int status = mysql_query(conn.mysql_,
                              "DROP TABLE IF EXISTS ipv6_reservations");
     ASSERT_EQ(0, status) << mysql_error(conn.mysql_);
 
     // Create a host with a reservation.
-    HostPtr host = initializeHost6("2001:db8:1::1", Host::IDENT_HWADDR, false);
+    HostPtr host = HostDataSourceUtils::initializeHost6("2001:db8:1::1", Host::IDENT_HWADDR, false);
     // Let's assign some DHCPv4 subnet to the host, because we will use the
     // DHCPv4 subnet to try to retrieve the host after failed insertion.
     host->setIPv4SubnetID(SubnetID(4));
@@ -510,4 +606,48 @@ TEST_F(MySqlHostDataSourceTest, testAddRollback) {
     EXPECT_FALSE(from_hds);
 }
 
-}; // Of anonymous namespace
+// This test checks that siaddr, sname, file fields can be retrieved
+/// from a database for a host.
+TEST_F(MySqlHostDataSourceTest, messageFields) {
+    testMessageFields4();
+}
+
+// Check that delete(subnet-id, addr4) works.
+TEST_F(MySqlHostDataSourceTest, deleteByAddr4) {
+    testDeleteByAddr4();
+}
+
+// Check that delete(subnet4-id, identifier-type, identifier) works.
+TEST_F(MySqlHostDataSourceTest, deleteById4) {
+    testDeleteById4();
+}
+
+// Check that delete(subnet4-id, identifier-type, identifier) works,
+// even when options are present.
+TEST_F(MySqlHostDataSourceTest, deleteById4Options) {
+    testDeleteById4Options();
+}
+
+// Check that delete(subnet6-id, identifier-type, identifier) works.
+TEST_F(MySqlHostDataSourceTest, deleteById6) {
+    testDeleteById6();
+}
+
+// Check that delete(subnet6-id, identifier-type, identifier) works,
+// even when options are present.
+TEST_F(MySqlHostDataSourceTest, deleteById6Options) {
+    testDeleteById6Options();
+}
+
+// Tests that multiple reservations without IPv4 addresses can be
+// specified within a subnet.
+TEST_F(MySqlHostDataSourceTest, testMultipleHostsNoAddress4) {
+    testMultipleHostsNoAddress4();
+}
+
+// Tests that multiple hosts can be specified within an IPv6 subnet.
+TEST_F(MySqlHostDataSourceTest, testMultipleHosts6) {
+    testMultipleHosts6();
+}
+
+}  // namespace

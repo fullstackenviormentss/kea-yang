@@ -34,9 +34,9 @@ libkea_eval_la_LIBADD  += $(top_builddir)/src/lib/log/libkea-log.la
 libkea_eval_la_LIBADD  += $(top_builddir)/src/lib/util/threads/libkea-threads.la
 libkea_eval_la_LIBADD  += $(top_builddir)/src/lib/util/libkea-util.la
 libkea_eval_la_LIBADD  += $(top_builddir)/src/lib/exceptions/libkea-exceptions.la
-libkea_eval_la_LIBADD  += $(LOG4CPLUS_LIBS) $(CRYPTO_LIBS)
+libkea_eval_la_LIBADD  += $(LOG4CPLUS_LIBS) $(CRYPTO_LIBS) $(BOOST_LIBS)
 
-libkea_eval_la_LDFLAGS  = -no-undefined -version-info 3:0:0
+libkea_eval_la_LDFLAGS  = -no-undefined -version-info 6:0:0
 libkea_eval_la_LDFLAGS += $(CRYPTO_LDFLAGS)
 
 EXTRA_DIST  = eval.dox
@@ -85,11 +85,16 @@ parser: lexer.cc location.hh position.hh stack.hh parser.cc parser.h
 	@echo "Flex/bison files regenerated"
 
 # --- Flex/Bison stuff below --------------------------------------------------
+# When debugging grammar issues, it's useful to add -v to bison parameters.
+# bison will generate parser.output file that explains the whole grammar.
+# It can be used to manually follow what's going on in the parser.
+# This is especially useful if yydebug_ is set to 1 as that variable
+# will cause parser to print out its internal state.
 location.hh position.hh stack.hh parser.cc parser.h: parser.yy
 	$(YACC) --defines=parser.h -o parser.cc parser.yy
 
 lexer.cc: lexer.ll
-	$(LEX) -o lexer.cc lexer.ll
+	$(LEX) --prefix eval -o lexer.cc lexer.ll
 
 else
 
@@ -97,3 +102,15 @@ parser location.hh position.hh stack.hh parser.cc parser.h lexer.cc:
 	@echo Parser generation disabled. Configure with --enable-generate-parser to enable it.
 
 endif
+
+
+# Specify the headers for copying into the installation directory tree.
+libkea_eval_includedir = $(pkgincludedir)/eval
+libkea_eval_include_HEADERS = \
+	eval_context.h \
+	eval_context_decl.h \
+	eval_log.h \
+	evaluate.h \
+	parser.h \
+	token.h
+# does not include *.hh generated headers as they come with lexer and parser.

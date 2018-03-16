@@ -1,4 +1,4 @@
-// Copyright (C) 2014-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2014-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,6 +8,8 @@
 #define HOST_H
 
 #include <asiolink/io_address.h>
+#include <cc/data.h>
+#include <cc/user_context.h>
 #include <dhcp/classify.h>
 #include <dhcp/duid.h>
 #include <dhcp/hwaddr.h>
@@ -22,7 +24,7 @@
 namespace isc {
 namespace dhcp {
 
-/// @brief HostID (used only when storing in MySQL or Postgres)
+/// @brief HostID (used only when storing in MySQL, PostgreSQL or Cassandra)
 typedef uint64_t HostID;
 
 /// @brief IPv6 reservation for a host.
@@ -170,7 +172,7 @@ typedef std::pair<IPv6ResrvIterator, IPv6ResrvIterator> IPv6ResrvRange;
 /// - disable IPv4 reservation without a need to set it to the 0.0.0.0 address
 /// Note that the last three operations are mainly required for managing
 /// host reservations which will be implemented later.
-class Host {
+class Host : public UserContext {
 public:
 
     /// @brief Type of the host identifier.
@@ -184,12 +186,13 @@ public:
         IDENT_HWADDR,
         IDENT_DUID,
         IDENT_CIRCUIT_ID,
-        IDENT_CLIENT_ID
+        IDENT_CLIENT_ID,
+        IDENT_FLEX, ///< Flexible host identifier.
     };
 
     /// @brief Constant pointing to the last identifier of the
     /// @ref IdentifierType enumeration.
-    static const IdentifierType LAST_IDENTIFIER_TYPE = IDENT_CLIENT_ID;
+    static const IdentifierType LAST_IDENTIFIER_TYPE = IDENT_FLEX;
 
     /// @brief Constructor.
     ///
@@ -214,6 +217,9 @@ public:
     /// separated by commas. The names get trimmed by this constructor.
     /// @param dhcp6_client_classes A string holding DHCPv6 client class names
     /// separated by commas. The names get trimmed by this constructor.
+    /// @param next_server IPv4 address of next server (siaddr).
+    /// @param server_host_name Server host name (a.k.a. sname).
+    /// @param boot_file_name Boot file name (a.k.a. file).
     ///
     /// @throw BadValue if the provided values are invalid. In particular,
     /// if the identifier is invalid.
@@ -223,7 +229,10 @@ public:
          const asiolink::IOAddress& ipv4_reservation,
          const std::string& hostname = "",
          const std::string& dhcp4_client_classes = "",
-         const std::string& dhcp6_client_classes = "");
+         const std::string& dhcp6_client_classes = "",
+         const asiolink::IOAddress& next_server = asiolink::IOAddress::IPV4_ZERO_ADDRESS(),
+         const std::string& server_host_name = "",
+         const std::string& boot_file_name = "");
 
     /// @brief Constructor.
     ///
@@ -234,7 +243,7 @@ public:
     /// - "yy:yy:yy:yy:yy:yy"
     /// - "yyyyyyyyyy",
     /// - "0xyyyyyyyyyy",
-    /// - "'some identfier'".
+    /// - "'some identifier'".
     /// where y is a hexadecimal digit.
     ///
     /// Note that it is possible to use textual representation, e.g. 'some identifier',
@@ -258,6 +267,9 @@ public:
     /// separated by commas. The names get trimmed by this constructor.
     /// @param dhcp6_client_classes A string holding DHCPv6 client class names
     /// separated by commas. The names get trimmed by this constructor.
+    /// @param next_server IPv4 address of next server (siaddr).
+    /// @param server_host_name Server host name (a.k.a. sname).
+    /// @param boot_file_name Boot file name (a.k.a. file).
     ///
     /// @throw BadValue if the provided values are invalid. In particular,
     /// if the identifier is invalid.
@@ -266,7 +278,10 @@ public:
          const asiolink::IOAddress& ipv4_reservation,
          const std::string& hostname = "",
          const std::string& dhcp4_client_classes = "",
-         const std::string& dhcp6_client_classes = "");
+         const std::string& dhcp6_client_classes = "",
+         const asiolink::IOAddress& next_server = asiolink::IOAddress::IPV4_ZERO_ADDRESS(),
+         const std::string& server_host_name = "",
+         const std::string& boot_file_name = "");
 
     /// @brief Replaces currently used identifier with a new identifier.
     ///
@@ -449,10 +464,47 @@ public:
         return (dhcp6_client_classes_);
     }
 
+    /// @brief Sets new value for next server field (siaddr).
+    ///
+    /// @param next_server New address of a next server.
+    ///
+    /// @throw isc::BadValue if the provided address is not an IPv4 address,
+    /// is broadcast address.
+    void setNextServer(const asiolink::IOAddress& next_server);
+
+    /// @brief Returns value of next server field (siaddr).
+    const asiolink::IOAddress& getNextServer() const {
+        return (next_server_);
+    }
+
+    /// @brief Sets new value for server hostname (sname).
+    ///
+    /// @param server_host_name New value for server hostname.
+    ///
+    /// @throw BadValue if hostname is longer than 63 bytes.
+    void setServerHostname(const std::string& server_host_name);
+
+    /// @brief Returns value of server hostname (sname).
+    const std::string& getServerHostname() const {
+        return (server_host_name_);
+    }
+
+    /// @brief Sets new value for boot file name (file).
+    ///
+    /// @param boot_file_name New value of boot file name.
+    ///
+    /// @throw BadValue if boot file name is longer than 128 bytes.
+    void setBootFileName(const std::string& boot_file_name);
+
+    /// @brief Returns value of boot file name (file).
+    const std::string& getBootFileName() const {
+        return (boot_file_name_);
+    }
+
     /// @brief Returns pointer to the DHCPv4 option data configuration for
     /// this host.
     ///
-    /// Returned pointer can be used to add, remove and udate options
+    /// Returned pointer can be used to add, remove and update options
     /// reserved for a host.
     CfgOptionPtr getCfgOption4() {
         return (cfg_option4_);
@@ -467,7 +519,7 @@ public:
     /// @brief Returns pointer to the DHCPv6 option data configuration for
     /// this host.
     ///
-    /// Returned pointer can be used to add, remove and udate options
+    /// Returned pointer can be used to add, remove and update options
     /// reserved for a host.
     CfgOptionPtr getCfgOption6() {
         return (cfg_option6_);
@@ -482,17 +534,27 @@ public:
     /// @brief Returns information about the host in the textual format.
     std::string toText() const;
 
-    /// @brief Sets Host ID (primary key in MySQL and Postgres backends)
+    /// @brief Sets Host ID (primary key in MySQL, PostgreSQL and Cassandra backends)
     /// @param id HostId value
     void setHostId(HostID id) {
         host_id_ = id;
     }
 
-    /// @brief Returns Host ID (primary key in MySQL and Postgres backends)
+    /// @brief Returns Host ID (primary key in MySQL, PostgreSQL and Cassandra backends)
     /// @return id HostId value (or 0 if not set)
     HostID getHostId() const {
         return (host_id_);
     }
+
+    /// @brief Unparses (converts to Element representation) IPv4 host
+    ///
+    /// @return Element representation of the host
+    isc::data::ElementPtr toElement4() const;
+
+    /// @brief Unparses (converts to Element representation) IPv4 host
+    ///
+    /// @return Element representation of the host
+    isc::data::ElementPtr toElement6() const;
 
 private:
 
@@ -527,9 +589,15 @@ private:
     ClientClasses dhcp4_client_classes_;
     /// @brief Collection of classes associated with a DHCPv6 client.
     ClientClasses dhcp6_client_classes_;
+    /// @brief Next server (a.k.a. siaddr, carried in DHCPv4 message).
+    asiolink::IOAddress next_server_;
+    /// @brief Server host name (a.k.a. sname, carried in DHCPv4 message).
+    std::string server_host_name_;
+    /// @brief Boot file name (a.k.a. file, carried in DHCPv4 message)
+    std::string boot_file_name_;
 
     /// @brief HostID (a unique identifier assigned when the host is stored in
-    ///                MySQL or Pgsql)
+    ///     MySQL, PostgreSQL or Cassandra)
     uint64_t host_id_;
 
     /// @brief Pointer to the DHCPv4 option data configuration for this host.

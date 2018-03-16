@@ -1,4 +1,4 @@
-// Copyright (C) 2013-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2013-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -25,7 +25,7 @@
 /// 4. Right click on DHCPv6 -> Copy -> Bytes -> Hex Stream
 /// 5. Paste it as: string hex_string="[paste here]";
 /// 6. Coding guidelines line restrictions apply, so wrap your code as necessary
-/// 7. Make sure you decribe the capture appropriately
+/// 7. Make sure you describe the capture appropriately
 /// 8. Follow whatever rest of the methods are doing (set ports, ifaces etc.)
 /// 9. To easily copy packet description, click File... -> Extract packet
 ///    dissections -> as plain text file...
@@ -55,7 +55,7 @@ Pkt6Ptr PktCaptures::captureSimpleSolicit() {
         1,  // type 1 = SOLICIT
         0xca, 0xfe, 0x01, // trans-id = 0xcafe01
         0, 1, // option type 1 (client-id)
-        0, 10, // option lenth 10
+        0, 10, // option length 10
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // DUID
         0, 3, // option type 3 (IA_NA)
         0, 12, // option length 12
@@ -375,6 +375,118 @@ isc::dhcp::Pkt6Ptr PktCaptures::captureRelayed2xRSOO() {
         "00060006001700f200f3"
         "0012001c4953414d3134347c3239397c697076367c6e743a76703a313a" // vendor-class
         "313130002500120000197f0001000118b033410000215c18a9";
+
+    std::vector<uint8_t> bin;
+
+    // Decode the hex string and store it in bin (which happens
+    // to be OptionBuffer format)
+    isc::util::encode::decodeHex(hex_string, bin);
+
+    Pkt6Ptr pkt(new Pkt6(&bin[0], bin.size()));
+    pkt->setRemotePort(547);
+    pkt->setRemoteAddr(IOAddress("fe80::1234"));
+    pkt->setLocalPort(547);
+    pkt->setLocalAddr(IOAddress("ff05::1:3"));
+    pkt->setIndex(2);
+    pkt->setIface("eth0");
+    return (pkt);
+}
+
+isc::dhcp::Pkt6Ptr PktCaptures::captureSolicitWithVIVSO() {
+
+    // Message type:   Solicit (1)
+    // Transaction ID: 0xba048e
+    // Client  Identifier
+    //     Option: Client  Identifier  (1)
+    //     Length: 10
+    //     Value:  0003000108002725d3f4
+    //     DUID:   0003000108002725d3f4
+    //     DUID    Type:   link-layer  address (3)
+    //     Hardware    type:   Ethernet    (1)
+    //     Link-layer  address:    08:00:27:25:d3:f4
+    //     Identity    Association for Non-temporary   Address
+    // Option: Identity    Association for Non-temporary   Address (3)
+    //     Length: 40
+    //     Value:  00aabbcc0000000000000000000500180000000000000000...
+    //     IAID:   00aabbcc
+    //     T1: 0
+    //     T2: 0
+    //     IA  Address
+    //         Option: IA  Address (5)
+    //         Length: 24
+    //         Value:  000000000000000000000000000000000000000000000000
+    //         IPv6    address:    ::
+    //         Preferred   lifetime:   0
+    //         Valid   lifetime:
+    //     Option  Request
+    //         Option: Option  Request (6)
+    //         Length: 6
+    //         Value:  00d100d2000c
+    //     Vendor-specific Information
+    //         Option: Vendor-specific Information (17)
+    //         Length: 4
+    //         Value:  00001e61
+    //         Enterprise  ID: E-DYNAMICS.ORG  (7777)
+    string hex_string =
+        "01ba048e0001000a0003000108002725d3f40003002800aabbcc"
+        "00000000000000000005001800000000000000000000000000000"
+        "00000000000000000000006000600d100d2000c0011000400001e61";
+
+    std::vector<uint8_t> bin;
+
+    // Decode the hex string and store it in bin (which happens
+    // to be OptionBuffer format)
+    isc::util::encode::decodeHex(hex_string, bin);
+
+    Pkt6Ptr pkt(new Pkt6(&bin[0], bin.size()));
+    pkt->setRemotePort(547);
+    pkt->setRemoteAddr(IOAddress("fe80::1234"));
+    pkt->setLocalPort(547);
+    pkt->setLocalAddr(IOAddress("ff05::1:3"));
+    pkt->setIndex(2);
+    pkt->setIface("eth0");
+    return (pkt);
+}
+
+isc::dhcp::Pkt6Ptr PktCaptures::captureSolicitWithTruncatedVIVSO() {
+
+    // Message type:   Solicit (1)
+    // Transaction ID: 0xba048e
+    // Client  Identifier
+    //     Option: Client  Identifier  (1)
+    //     Length: 10
+    //     Value:  0003000108002725d3f4
+    //     DUID:   0003000108002725d3f4
+    //     DUID    Type:   link-layer  address (3)
+    //     Hardware    type:   Ethernet    (1)
+    //     Link-layer  address:    08:00:27:25:d3:f4
+    //     Identity    Association for Non-temporary   Address
+    // Option: Identity    Association for Non-temporary   Address (3)
+    //     Length: 40
+    //     Value:  00aabbcc0000000000000000000500180000000000000000...
+    //     IAID:   00aabbcc
+    //     T1: 0
+    //     T2: 0
+    //     IA  Address
+    //         Option: IA  Address (5)
+    //         Length: 24
+    //         Value:  000000000000000000000000000000000000000000000000
+    //         IPv6    address:    ::
+    //         Preferred   lifetime:   0
+    //         Valid   lifetime:
+    //     Option  Request
+    //         Option: Option  Request (6)
+    //         Length: 6
+    //         Value:  00d100d2000c
+    //     Vendor-specific Information
+    //         Option: Vendor-specific Information (17)
+    //         Length: 1                                <-------- length too short!
+    //         Value:  00001e61
+    //         Enterprise  ID: E-DYNAMICS.ORG  (7777)
+    string hex_string =
+        "01ba048e0001000a0003000108002725d3f40003002800aabbcc"
+        "00000000000000000005001800000000000000000000000000000"
+        "00000000000000000000006000600d100d2000c0011000100001e61";
 
     std::vector<uint8_t> bin;
 

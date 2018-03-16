@@ -1,8 +1,10 @@
-// Copyright (C) 2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2015-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+#include <config.h>
 
 #include <util/stopwatch.h>
 #include <util/stopwatch_impl.h>
@@ -59,7 +61,7 @@ public:
 
 protected:
 
-    /// @brief Returs the current time.
+    /// @brief Returns the current time.
     ///
     /// This method returns the fixed @c current_time_ timestamp.
     virtual ptime getCurrentTime() const;
@@ -246,7 +248,6 @@ TEST_F(StopwatchTest, realTime) {
     usleep(1000);
 
     // The durations should get updated as appropriate.
-    current_duration = stopwatch.getLastMilliseconds();
     EXPECT_GE(stopwatch.getLastMilliseconds(), 1);
     EXPECT_GE(stopwatch.getTotalMilliseconds(), 2);
 }

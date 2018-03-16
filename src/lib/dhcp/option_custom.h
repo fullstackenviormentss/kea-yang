@@ -1,4 +1,4 @@
-// Copyright (C) 2012-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2012-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,6 +7,7 @@
 #ifndef OPTION_CUSTOM_H
 #define OPTION_CUSTOM_H
 
+#include <asiolink/io_address.h>
 #include <dhcp/option.h>
 #include <dhcp/option_definition.h>
 #include <util/io_utilities.h>
@@ -101,6 +102,10 @@ public:
     void addArrayDataField(const T value) {
         checkArrayType();
         OptionDataType data_type = definition_.getType();
+        // Handle record last field.
+        if (data_type == OPT_RECORD_TYPE) {
+            data_type = definition_.getRecordFields().back();
+        }
         if (OptionDataTypeTraits<T>::type != data_type) {
             isc_throw(isc::dhcp::InvalidDataType,
                       "specified data type " << data_type << " does not"
@@ -111,6 +116,29 @@ public:
         OptionDataTypeUtil::writeInt<T>(value, buf);
         buffers_.push_back(buf);
     }
+
+    /// @brief Create new buffer and store tuple value in it
+    ///
+    /// @param value value to be stored as a tuple in the created buffer.
+    void addArrayDataField(const std::string& value);
+
+    /// @brief Create new buffer and store tuple value in it
+    ///
+    /// @param value value to be stored as a tuple in the created buffer.
+    void addArrayDataField(const OpaqueDataTuple& value);
+
+    /// @brief Create new buffer and store variable length prefix in it.
+    ///
+    /// @param prefix_len Prefix length.
+    /// @param prefix Prefix.
+    void addArrayDataField(const PrefixLen& prefix_len,
+                           const asiolink::IOAddress& prefix);
+
+    /// @brief Create new buffer and store PSID length / value in it.
+    ///
+    /// @param psid_len PSID length.
+    /// @param psid PSID.
+    void addArrayDataField(const PSIDLen& psid_len, const PSID& psid);
 
     /// @brief Return a number of the data fields.
     ///
@@ -148,6 +176,34 @@ public:
     /// @param buf buffer holding binary data to be written.
     /// @param index buffer index.
     void writeBinary(const OptionBuffer& buf, const uint32_t index = 0);
+
+    /// @brief Read a buffer as length and string tuple.
+    ///
+    /// @param index buffer index.
+    ///
+    /// @throw isc::OutOfRange if index is out of range.
+    /// @return string read from a buffer.
+    std::string readTuple(const uint32_t index = 0) const;
+
+    /// @brief Read a buffer into a length and string tuple.
+    ///
+    /// @param tuple tuple to fill.
+    /// @param index buffer index.
+    ///
+    /// @throw isc::OutOfRange if index is out of range.
+    void readTuple(OpaqueDataTuple& tuple, const uint32_t index = 0) const;
+
+    /// @brief Write a length and string tuple into a buffer.
+    ///
+    /// @param value value to be written.
+    /// @param index buffer index.
+    void writeTuple(const std::string& value, const uint32_t index = 0);
+
+    /// @brief Write a length and string tuple into a buffer.
+    ///
+    /// @param value value to be written.
+    /// @param index buffer index.
+    void writeTuple(const OpaqueDataTuple& value, const uint32_t index = 0);
 
     /// @brief Read a buffer as boolean value.
     ///
@@ -227,6 +283,45 @@ public:
         // If successful, replace the old buffer with new one.
         std::swap(buffers_[index], buf);
     }
+
+    /// @brief Read a buffer as variable length prefix.
+    ///
+    /// @param index buffer index.
+    ///
+    /// @return Prefix length / value tuple.
+    /// @throw isc::OutOfRange of index is out of range.
+    PrefixTuple readPrefix(const uint32_t index = 0) const;
+
+    /// @brief Write prefix length and value into a buffer.
+    ///
+    /// @param prefix_len Prefix length.
+    /// @param prefix Prefix value.
+    /// @param index Buffer index.
+    ///
+    /// @throw isc::OutOfRange if index is out of range.
+    void writePrefix(const PrefixLen& prefix_len,
+                     const asiolink::IOAddress& prefix,
+                     const uint32_t index = 0);
+
+    /// @brief Read a buffer as a PSID length / value tuple.
+    ///
+    /// @param index buffer index.
+    ///
+    /// @return PSID length / value tuple.
+    /// @throw isc::OutOfRange of index is out of range.
+    PSIDTuple readPsid(const uint32_t index = 0) const;
+
+    /// @brief Write PSID length / value into a buffer.
+    ///
+    /// @param psid_len PSID length value.
+    /// @param psid PSID value in the range of 0 .. 2^(PSID length).
+    /// @param index buffer index.
+    ///
+    /// @throw isc::dhcp::BadDataTypeCast if PSID length or value is
+    /// invalid.
+    /// @throw isc::OutOfRange if index is out of range.
+    void writePsid(const PSIDLen& psid_len, const PSID& psid,
+                   const uint32_t index = 0);
 
     /// @brief Read a buffer as string value.
     ///
@@ -314,8 +409,28 @@ private:
     /// @throw isc::OutOfRange if index is out of range.
     void checkIndex(const uint32_t index) const;
 
+    /// @brief Create a non initialized buffer.
+    ///
+    /// @param buffer buffer to update.
+    /// @param data_type data type of buffer.
+    void createBuffer(OptionBuffer& buffer,
+                      const OptionDataType data_type) const;
+
     /// @brief Create a collection of non initialized buffers.
     void createBuffers();
+
+    /// @brief Return length of a buffer.
+    ///
+    /// @param data_type data type of buffer.
+    /// @param in_array true is called from the array case
+    /// @param begin iterator to first byte of input data.
+    /// @param end iterator to end of input data.
+    ///
+    /// @return size of data to copy to the buffer.
+    /// @throw isc::OutOfRange if option buffer is truncated.
+    size_t bufferLength(const OptionDataType data_type, bool in_array,
+                        OptionBuffer::const_iterator begin,
+                        OptionBuffer::const_iterator end) const;
 
     /// @brief Create collection of buffers representing data field values.
     ///
@@ -362,12 +477,23 @@ OptionCustom::checkDataType(const uint32_t index) const {
     if (data_type == OPT_RECORD_TYPE) {
         const OptionDefinition::RecordFieldsCollection& record_fields =
             definition_.getRecordFields();
-        // When we initialized buffers we have already checked that
-        // the number of these buffers is equal to number of option
-        // fields in the record so the condition below should be met.
-        assert(index < record_fields.size());
-        // Get the data type to be returned.
-        data_type = record_fields[index];
+        if (definition_.getArrayType()) {
+            // If the array flag is set the last record field is an array.
+            if (index < record_fields.size()) {
+                // Get the data type to be returned.
+                data_type = record_fields[index];
+            } else {
+                // Get the data type to be returned from the last record field.
+                data_type = record_fields.back();
+            }
+        } else {
+            // When we initialized buffers we have already checked that
+            // the number of these buffers is equal to number of option
+            // fields in the record so the condition below should be met.
+            assert(index < record_fields.size());
+            // Get the data type to be returned.
+            data_type = record_fields[index];
+        }
     }
 
     if (OptionDataTypeTraits<T>::type != data_type) {

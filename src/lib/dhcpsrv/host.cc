@@ -1,15 +1,20 @@
-// Copyright (C) 2014-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2014-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include <config.h>
+#include <dhcp/pkt4.h>
 #include <dhcpsrv/host.h>
 #include <util/encode/hex.h>
 #include <util/strutil.h>
+#include <asiolink/io_address.h>
 #include <exceptions/exceptions.h>
 #include <sstream>
+
+using namespace isc::data;
+using namespace isc::asiolink;
 
 namespace isc {
 namespace dhcp {
@@ -74,14 +79,20 @@ Host::Host(const uint8_t* identifier, const size_t identifier_len,
            const asiolink::IOAddress& ipv4_reservation,
            const std::string& hostname,
            const std::string& dhcp4_client_classes,
-           const std::string& dhcp6_client_classes)
+           const std::string& dhcp6_client_classes,
+           const asiolink::IOAddress& next_server,
+           const std::string& server_host_name,
+           const std::string& boot_file_name)
+
     : identifier_type_(identifier_type),
       identifier_value_(), ipv4_subnet_id_(ipv4_subnet_id),
       ipv6_subnet_id_(ipv6_subnet_id),
       ipv4_reservation_(asiolink::IOAddress::IPV4_ZERO_ADDRESS()),
       hostname_(hostname), dhcp4_client_classes_(dhcp4_client_classes),
-      dhcp6_client_classes_(dhcp6_client_classes), host_id_(0),
-      cfg_option4_(new CfgOption()), cfg_option6_(new CfgOption()) {
+      dhcp6_client_classes_(dhcp6_client_classes),
+      next_server_(asiolink::IOAddress::IPV4_ZERO_ADDRESS()),
+      server_host_name_(server_host_name), boot_file_name_(boot_file_name),
+      host_id_(0), cfg_option4_(new CfgOption()), cfg_option6_(new CfgOption()) {
 
     // Initialize host identifier.
     setIdentifier(identifier, identifier_len, identifier_type);
@@ -90,6 +101,11 @@ Host::Host(const uint8_t* identifier, const size_t identifier_len,
         // Validate and set IPv4 address reservation.
         setIPv4Reservation(ipv4_reservation);
     }
+
+    if (!next_server.isV4Zero()) {
+        // Validate and set next server address.
+        setNextServer(next_server);
+    }
 }
 
 Host::Host(const std::string& identifier, const std::string& identifier_name,
@@ -97,14 +113,19 @@ Host::Host(const std::string& identifier, const std::string& identifier_name,
            const asiolink::IOAddress& ipv4_reservation,
            const std::string& hostname,
            const std::string& dhcp4_client_classes,
-           const std::string& dhcp6_client_classes)
+           const std::string& dhcp6_client_classes,
+           const asiolink::IOAddress& next_server,
+           const std::string& server_host_name,
+           const std::string& boot_file_name)
     : identifier_type_(IDENT_HWADDR),
       identifier_value_(), ipv4_subnet_id_(ipv4_subnet_id),
       ipv6_subnet_id_(ipv6_subnet_id),
       ipv4_reservation_(asiolink::IOAddress::IPV4_ZERO_ADDRESS()),
       hostname_(hostname), dhcp4_client_classes_(dhcp4_client_classes),
-      dhcp6_client_classes_(dhcp6_client_classes), host_id_(0),
-      cfg_option4_(new CfgOption()), cfg_option6_(new CfgOption()) {
+      dhcp6_client_classes_(dhcp6_client_classes),
+      next_server_(asiolink::IOAddress::IPV4_ZERO_ADDRESS()),
+      server_host_name_(server_host_name), boot_file_name_(boot_file_name),
+      host_id_(0), cfg_option4_(new CfgOption()), cfg_option6_(new CfgOption()) {
 
     // Initialize host identifier.
     setIdentifier(identifier, identifier_name);
@@ -112,6 +133,11 @@ Host::Host(const std::string& identifier, const std::string& identifier_name,
     if (!ipv4_reservation.isV4Zero()) {
         // Validate and set IPv4 address reservation.
         setIPv4Reservation(ipv4_reservation);
+    }
+
+    if (!next_server.isV4Zero()) {
+        // Validate and set next server address.
+        setNextServer(next_server);
     }
 }
 
@@ -138,7 +164,8 @@ Host::getIdentifierType(const std::string& identifier_name) {
 
     } else if (identifier_name == "client-id") {
         return (IDENT_CLIENT_ID);
-
+    } else if (identifier_name == "flex-id") {
+        return (IDENT_FLEX);
     } else {
         isc_throw(isc::BadValue, "invalid client identifier type '"
                   << identifier_name << "'");
@@ -182,6 +209,9 @@ Host::getIdentifierAsText(const IdentifierType& type, const uint8_t* value,
     case IDENT_CLIENT_ID:
         s << "client-id";
         break;
+    case IDENT_FLEX:
+        s << "flex-id";
+        break;
     default:
         // This should never happen actually, unless we add new identifier
         // and forget to add a case for it above.
@@ -206,6 +236,9 @@ Host::getIdentifierName(const IdentifierType& type) {
 
     case Host::IDENT_CLIENT_ID:
         return ("client-id");
+
+    case Host::IDENT_FLEX:
+        return ("flex-id");
 
     default:
         ;
@@ -235,7 +268,7 @@ Host::setIdentifier(const std::string& identifier, const std::string& name) {
     // Set identifier type.
     identifier_type_ = getIdentifierType(name);
 
-    // Idetifier value can either be specified as string of hexadecimal
+    // Identifier value can either be specified as string of hexadecimal
     // digits or a string in quotes. The latter is copied to a vector excluding
     // quote characters.
 
@@ -325,6 +358,7 @@ Host::addClientClass4(const std::string& class_name) {
     addClientClassInternal(dhcp4_client_classes_, class_name);
 }
 
+
 void
 Host::addClientClass6(const std::string& class_name) {
     addClientClassInternal(dhcp6_client_classes_, class_name);
@@ -337,6 +371,159 @@ Host::addClientClassInternal(ClientClasses& classes,
     if (!trimmed.empty()) {
         classes.insert(ClientClass(trimmed));
     }
+}
+
+void
+Host::setNextServer(const asiolink::IOAddress& next_server) {
+    if (!next_server.isV4()) {
+        isc_throw(isc::BadValue, "next server address '" << next_server
+                  << "' is not a valid IPv4 address");
+    } else if (next_server.isV4Bcast()) {
+        isc_throw(isc::BadValue, "invalid next server address '"
+                  << next_server << "'");
+    }
+
+    next_server_ = next_server;
+}
+
+void
+Host::setServerHostname(const std::string& server_host_name) {
+    if (server_host_name.size() > Pkt4::MAX_SNAME_LEN - 1) {
+        isc_throw(isc::BadValue, "server hostname length must not exceed "
+                  << (Pkt4::MAX_SNAME_LEN - 1));
+    }
+    server_host_name_ = server_host_name;
+}
+
+void
+Host::setBootFileName(const std::string& boot_file_name) {
+    if (boot_file_name.size() > Pkt4::MAX_FILE_LEN - 1) {
+        isc_throw(isc::BadValue, "boot file length must not exceed "
+                  << (Pkt4::MAX_FILE_LEN - 1));
+    }
+    boot_file_name_ = boot_file_name;
+}
+
+ElementPtr
+Host::toElement4() const {
+
+    // Prepare the map
+    ElementPtr map = Element::createMap();
+    // Set the user context
+    contextToElement(map);
+    // Set the identifier
+    Host::IdentifierType id_type = getIdentifierType();
+    if (id_type == Host::IDENT_HWADDR) {
+        HWAddrPtr hwaddr = getHWAddress();
+        map->set("hw-address", Element::create(hwaddr->toText(false)));
+    } else if (id_type == Host::IDENT_DUID) {
+        DuidPtr duid = getDuid();
+        map->set("duid", Element::create(duid->toText()));
+    } else if (id_type == Host::IDENT_CIRCUIT_ID) {
+        const std::vector<uint8_t>& bin = getIdentifier();
+        std::string circuit_id = util::encode::encodeHex(bin);
+        map->set("circuit-id", Element::create(circuit_id));
+    } else if (id_type == Host::IDENT_CLIENT_ID) {
+        const std::vector<uint8_t>& bin = getIdentifier();
+        std::string client_id = util::encode::encodeHex(bin);
+        map->set("client-id", Element::create(client_id));
+    } else if (id_type == Host::IDENT_FLEX) {
+        const std::vector<uint8_t>& bin = getIdentifier();
+        std::string flex = util::encode::encodeHex(bin);
+        map->set("flex-id", Element::create(flex));
+    } else {
+        isc_throw(ToElementError, "invalid identifier type: " << id_type);
+    }
+    // Set the reservation (if not 0.0.0.0 which may not be re-read)
+    const IOAddress& address = getIPv4Reservation();
+    if (!address.isV4Zero()) {
+        map->set("ip-address", Element::create(address.toText()));
+    }
+    // Set the hostname
+    const std::string& hostname = getHostname();
+    map->set("hostname", Element::create(hostname));
+    // Set next-server
+    const IOAddress& next_server = getNextServer();
+    map->set("next-server", Element::create(next_server.toText()));
+    // Set server-hostname
+    const std::string& server_hostname = getServerHostname();
+    map->set("server-hostname", Element::create(server_hostname));
+    // Set boot-file-name
+    const std::string& boot_file_name = getBootFileName();
+    map->set("boot-file-name", Element::create(boot_file_name));
+    // Set client-classes
+    const ClientClasses& cclasses = getClientClasses4();
+    ElementPtr classes = Element::createList();
+    for (ClientClasses::const_iterator cclass = cclasses.cbegin();
+         cclass != cclasses.end(); ++cclass) {
+        classes->add(Element::create(*cclass));
+    }
+    map->set("client-classes", classes);
+    // Set option-data
+    ConstCfgOptionPtr opts = getCfgOption4();
+    map->set("option-data", opts->toElement());
+
+    return (map);
+}
+
+ElementPtr
+Host::toElement6() const {
+    // Prepare the map
+    ElementPtr map = Element::createMap();
+    // Set the user context
+    contextToElement(map);
+    // Set the identifier
+    Host::IdentifierType id_type = getIdentifierType();
+    if (id_type == Host::IDENT_HWADDR) {
+        HWAddrPtr hwaddr = getHWAddress();
+        map->set("hw-address", Element::create(hwaddr->toText(false)));
+    } else if (id_type == Host::IDENT_DUID) {
+        DuidPtr duid = getDuid();
+        map->set("duid", Element::create(duid->toText()));
+    } else if (id_type == Host::IDENT_CIRCUIT_ID) {
+        isc_throw(ToElementError, "unexpected circuit-id DUID type");
+    } else if (id_type == Host::IDENT_CLIENT_ID) {
+        isc_throw(ToElementError, "unexpected client-id DUID type");
+    } else if (id_type == Host::IDENT_FLEX) {
+        const std::vector<uint8_t>& bin = getIdentifier();
+        std::string flex = util::encode::encodeHex(bin);
+        map->set("flex-id", Element::create(flex));
+    } else {
+        isc_throw(ToElementError, "invalid DUID type: " << id_type);
+    }
+    // Set reservations (ip-addresses)
+    IPv6ResrvRange na_resv = getIPv6Reservations(IPv6Resrv::TYPE_NA);
+    ElementPtr resvs = Element::createList();
+    for (IPv6ResrvIterator resv = na_resv.first;
+         resv != na_resv.second; ++resv) {
+        resvs->add(Element::create(resv->second.toText()));
+    }
+    map->set("ip-addresses", resvs);
+    // Set reservations (prefixes)
+    IPv6ResrvRange pd_resv = getIPv6Reservations(IPv6Resrv::TYPE_PD);
+    resvs = Element::createList();
+    for (IPv6ResrvIterator resv = pd_resv.first;
+         resv != pd_resv.second; ++resv) {
+        resvs->add(Element::create(resv->second.toText()));
+    }
+    map->set("prefixes", resvs);
+    // Set the hostname
+    const std::string& hostname = getHostname();
+    map->set("hostname", Element::create(hostname));
+    // Set client-classes
+    const ClientClasses& cclasses = getClientClasses6();
+    ElementPtr classes = Element::createList();
+    for (ClientClasses::const_iterator cclass = cclasses.cbegin();
+         cclass != cclasses.end(); ++cclass) {
+        classes->add(Element::create(*cclass));
+    }
+    map->set("client-classes", classes);
+
+    // Set option-data
+    ConstCfgOptionPtr opts = getCfgOption6();
+    map->set("option-data", opts->toElement());
+
+    return (map);
 }
 
 std::string
@@ -362,6 +549,16 @@ Host::toText() const {
     // Add IPv4 reservation.
     s << " ipv4_reservation=" << (ipv4_reservation_.isV4Zero() ? "(no)" :
                                   ipv4_reservation_.toText());
+
+    // Add next server.
+    s << " siaddr=" << (next_server_.isV4Zero() ? "(no)" :
+                             next_server_.toText());
+
+    // Add server host name.
+    s << " sname=" << (server_host_name_.empty() ? "(empty)" : server_host_name_);
+
+    // Add boot file name.
+    s << " file=" << (boot_file_name_.empty() ? "(empty)" : boot_file_name_);
 
     if (ipv6_reservations_.empty()) {
         s << " ipv6_reservations=(none)";

@@ -1,4 +1,4 @@
-// Copyright (C) 2011-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2011-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -41,6 +41,19 @@ typedef boost::shared_ptr<Option> OptionPtr;
 typedef std::multimap<unsigned int, OptionPtr> OptionCollection;
 /// A pointer to an OptionCollection
 typedef boost::shared_ptr<OptionCollection> OptionCollectionPtr;
+
+/// @brief Exception thrown during option unpacking
+/// This exception is thrown when an error has occurred, unpacking
+/// an option from a packet and we wish to abandon any any further
+/// unpacking efforts and allow the server to attempt to process
+/// the packet as it stands.  In other words, the option that failed
+/// is perhaps optional, and rather than drop the packet as unusable
+/// we wish to attempt to proces it.
+class SkipRemainingOptionsError : public Exception {
+public:
+    SkipRemainingOptionsError (const char* file, size_t line, const char* what) :
+        isc::Exception(file, line, what) { };
+};
 
 class Option {
 public:
@@ -409,9 +422,11 @@ protected:
     /// be created.
     template<typename OptionType>
     OptionPtr cloneInternal() const {
-        boost::shared_ptr<OptionType>
-            option(new OptionType(*dynamic_cast<const OptionType*>(this)));
-        return (option);
+        const OptionType* cast_this = dynamic_cast<const OptionType*>(this);
+        if (cast_this) {
+            return (boost::shared_ptr<OptionType>(new OptionType(*cast_this)));
+        }
+        return (OptionPtr());
     }
 
     /// @brief Store option's header in a buffer.

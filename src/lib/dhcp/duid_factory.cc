@@ -1,8 +1,10 @@
-// Copyright (C) 2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2015-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+#include <config.h>
 
 #include <dhcp/duid_factory.h>
 #include <dhcp/iface_mgr.h>
@@ -28,7 +30,7 @@ const size_t DUID_TYPE_LEN = 2;
 /// @brief Minimal length of the MAC address.
 const size_t MIN_MAC_LEN = 6;
 
-/// @brief Length of the enterprise if field.
+/// @brief Length of the enterprise ID field.
 const size_t ENTERPRISE_ID_LEN = 4;
 
 /// @brief Default length of the variable length identifier in the DUID-EN.
@@ -96,7 +98,7 @@ DUIDFactory::createLLT(const uint16_t htype, const uint32_t time_in,
         }
 
     } else if (htype_out == 0) {
-        // If link layer type unspecified and link layer adddress
+        // If link layer type unspecified and link layer address
         // is specified, use current type or HTYPE_ETHER.
         htype_out = ((htype_current != 0) ? htype_current :
                      static_cast<uint16_t>(HTYPE_ETHER));
@@ -221,7 +223,7 @@ DUIDFactory::createLL(const uint16_t htype,
         }
 
     } else if (htype_out == 0) {
-        // If link layer type unspecified and link layer adddress
+        // If link layer type unspecified and link layer address
         // is specified, use current type or HTYPE_ETHER.
         htype_out = ((htype_current != 0) ? htype_current :
             static_cast<uint16_t>(HTYPE_ETHER));
@@ -285,6 +287,12 @@ DUIDFactory::createLinkLayerId(std::vector<uint8_t>& identifier,
         // Assign link layer address and type.
         identifier.assign(iface->getMac(), iface->getMac() + iface->getMacLen());
         htype = iface->getHWType();
+
+        // If it looks like an Ethernet interface we should be happy
+        if ((htype == static_cast<uint16_t>(HTYPE_ETHER)) &&
+            (iface->getMacLen() == 6)) {
+            break;
+        }
     }
 
     // We failed to find an interface which link layer address could be

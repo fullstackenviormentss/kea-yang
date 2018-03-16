@@ -1,4 +1,4 @@
-// Copyright (C) 2014-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2014-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -13,6 +13,9 @@
 #include <dhcpsrv/host.h>
 #include <dhcpsrv/host_mgr.h>
 #include <dhcpsrv/subnet_id.h>
+#include <dhcpsrv/testutils/cql_schema.h>
+#include <dhcpsrv/testutils/mysql_schema.h>
+#include <dhcpsrv/testutils/pgsql_schema.h>
 #include <dhcp4/tests/dhcp4_test_utils.h>
 #include <dhcp4/tests/dhcp4_client.h>
 #include <boost/shared_ptr.hpp>
@@ -66,10 +69,60 @@ namespace {
 ///     - IP address 10.0.0.7 for HW address aa:bb:cc:dd:ee:ff
 ///     - IP address 10.0.0.8 for DUID 01:02:03:04:05
 ///     - IP address 10.0.0.9 for circuit-id 'charter950'
+///     - IP address 10.0.0.1 for client-id
 ///
 /// - Configuration 5:
 ///   - The same as configuration 4, but using the following order of
-///     host-reservation-identifiers: duid, circuit-id, hw-address.
+///     host-reservation-identifiers: duid, circuit-id, hw-address,
+///     client-id.
+///
+/// - Configuration 6:
+///   - This configuration provides reservations for next-server,
+///     server-hostname and boot-file-name value.
+///   - 1 subnet: 10.0.0.0/24
+///   - 1 reservation for this subnet:
+///     - Client's HW address: aa:bb:cc:dd:ee:ff
+///     - next-server = 10.0.0.7
+///     - server name = "some-name.example.org"
+///     - boot-file-name = "bootfile.efi"
+///
+/// - Configuration 7:
+///   - Used for testing custom value of dhcp-server-identifier option.
+///   - 3 subnets: 10.0.0.0/24, 192.0.2.0/26 and 192.0.2.64/26
+///   - Custom server identifier specified for 2 subnets subnet.
+///   - Custom server identifier specified at global level.
+///
+/// - Configuration 8:
+///   - Simple configuration with a single subnet and single pool
+///   - Using MySQL lease database backend to store leases
+///
+/// - Configuration 9:
+///   - Simple configuration with a single subnet and single pool
+///   - Using PostgreSQL lease database backend to store leases
+///
+/// - Configuration 10:
+///   - Simple configuration with a single subnet and single pool
+///   - Using Cassandra lease database backend to store leases
+///
+/// - Configuration 11:
+///   - Simple configuration with a single subnet
+///   - One in-pool reservation for a circuit-id of 'charter950'
+///
+/// - Configuration 12:
+///   - Simple configuration with a single subnet
+///   - One in-pool reservation for MAC address aa:bb:cc:dd:ee:ff
+///   - Host reservation mode set to ALL (fully enabled)
+///
+/// - Configuration 13:
+///   - Simple configuration with a single subnet as in #12
+///   - Host reservation mode set to "disabled" for testing that the
+///     reservations are ignored
+///
+/// - Configuration 14:
+///   - Simple configuration with a single subnet
+///   - Two host reservations, one out of the pool another one in pool
+///   - Host reservation mode set to "out-of-pool" to test that
+///     only out of pool reservations are honored.
 ///
 const char* DORA_CONFIGS[] = {
 // Configuration 0
@@ -233,6 +286,202 @@ const char* DORA_CONFIGS[] = {
         "       }"
         "    ]"
         "} ]"
+    "}",
+
+// Configuration 6
+    "{ \"interfaces-config\": {"
+        "      \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"valid-lifetime\": 600,"
+        "\"next-server\": \"10.0.0.1\","
+        "\"server-hostname\": \"nohost\","
+        "\"boot-file-name\": \"nofile\","
+        "\"subnet4\": [ { "
+        "    \"subnet\": \"10.0.0.0/24\", "
+        "    \"pools\": [ { \"pool\": \"10.0.0.10-10.0.0.100\" } ],"
+        "    \"reservations\": [ "
+        "       {"
+        "         \"hw-address\": \"aa:bb:cc:dd:ee:ff\","
+        "         \"next-server\": \"10.0.0.7\","
+        "         \"server-hostname\": \"some-name.example.org\","
+        "         \"boot-file-name\": \"bootfile.efi\""
+        "       }"
+        "    ]"
+        "} ]"
+    "}",
+
+// Configuration 7
+    "{ \"interfaces-config\": {"
+        "      \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"valid-lifetime\": 600,"
+        "\"option-data\": ["
+        "    {"
+        "        \"name\": \"dhcp-server-identifier\","
+        "        \"data\": \"3.4.5.6\""
+        "    }"
+        "],"
+        "\"subnet4\": ["
+        "    {"
+        "        \"subnet\": \"10.0.0.0/24\", "
+        "        \"pools\": [ { \"pool\": \"10.0.0.10-10.0.0.100\" } ],"
+        "        \"interface\": \"eth0\","
+        "        \"option-data\": ["
+        "            {"
+        "                \"name\": \"dhcp-server-identifier\","
+        "                \"data\": \"1.2.3.4\""
+        "            }"
+        "        ]"
+        "    },"
+        "    {"
+        "        \"subnet\": \"192.0.2.0/26\", "
+        "        \"pools\": [ { \"pool\": \"192.0.2.10-192.0.2.63\" } ],"
+        "        \"interface\": \"eth1\","
+        "        \"option-data\": ["
+        "            {"
+        "                \"name\": \"dhcp-server-identifier\","
+        "                \"data\": \"2.3.4.5\""
+        "            }"
+        "        ]"
+        "    },"
+        "    {"
+        "        \"subnet\": \"192.0.2.64/26\", "
+        "        \"pools\": [ { \"pool\": \"192.0.2.65-192.0.2.100\" } ],"
+        "        \"relay\": {"
+        "            \"ip-address\": \"10.2.3.4\""
+        "        }"
+        "    }"
+        "]"
+    "}",
+
+// Configuration 8
+    "{ \"interfaces-config\": {"
+        "   \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"lease-database\": {"
+        "   \"type\": \"mysql\","
+        "   \"name\": \"keatest\","
+        "   \"user\": \"keatest\","
+        "   \"password\": \"keatest\""
+        "},"
+        "\"valid-lifetime\": 600,"
+        "\"subnet4\": [ { "
+        "    \"subnet\": \"10.0.0.0/24\", "
+        "    \"id\": 1,"
+        "    \"pools\": [ { \"pool\": \"10.0.0.10-10.0.0.100\" } ]"
+        " } ]"
+    "}",
+
+// Configuration 9
+    "{ \"interfaces-config\": {"
+        "   \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"lease-database\": {"
+        "   \"type\": \"postgresql\","
+        "   \"name\": \"keatest\","
+        "   \"user\": \"keatest\","
+        "   \"password\": \"keatest\""
+        "},"
+        "\"valid-lifetime\": 600,"
+        "\"subnet4\": [ { "
+        "    \"subnet\": \"10.0.0.0/24\", "
+        "    \"id\": 1,"
+        "    \"pools\": [ { \"pool\": \"10.0.0.10-10.0.0.100\" } ]"
+        " } ]"
+    "}",
+
+// Configuration 10
+    "{ \"interfaces-config\": {"
+        "   \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"lease-database\": {"
+        "   \"type\": \"cql\","
+        "   \"name\": \"keatest\","
+        "   \"user\": \"keatest\","
+        "   \"password\": \"keatest\""
+        "},"
+        "\"valid-lifetime\": 600,"
+        "\"subnet4\": [ { "
+        "    \"subnet\": \"10.0.0.0/24\", "
+        "    \"id\": 1,"
+        "    \"pools\": [ { \"pool\": \"10.0.0.10-10.0.0.100\" } ]"
+        " } ]"
+    "}",
+
+// Configuration 11
+    "{ \"interfaces-config\": {"
+        "      \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"host-reservation-identifiers\": [ \"circuit-id\" ],"
+        "\"valid-lifetime\": 600,"
+        "\"subnet4\": [ { "
+        "    \"subnet\": \"10.0.0.0/24\", "
+        "    \"pools\": [ { \"pool\": \"10.0.0.5-10.0.0.100\" } ],"
+        "    \"reservations\": [ "
+        "       {"
+        "         \"circuit-id\": \"'charter950'\","
+        "         \"ip-address\": \"10.0.0.9\""
+        "       }"
+        "    ]"
+        "} ]"
+    "}",
+
+// Configuration 12
+    "{ \"interfaces-config\": {"
+        "      \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"valid-lifetime\": 600,"
+        "\"subnet4\": [ { "
+        "    \"subnet\": \"10.0.0.0/24\","
+        "    \"pools\": [ { \"pool\": \"10.0.0.10-10.0.0.100\" } ],"
+        "    \"reservation-mode\": \"all\","
+        "    \"reservations\": [ "
+        "       {"
+        "         \"hw-address\": \"aa:bb:cc:dd:ee:ff\","
+        "         \"ip-address\": \"10.0.0.65\""
+        "       }"
+        "    ]"
+        "} ]"
+    "}",
+
+// Configuration 13
+    "{ \"interfaces-config\": {"
+        "      \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"valid-lifetime\": 600,"
+        "\"subnet4\": [ { "
+        "    \"subnet\": \"10.0.0.0/24\","
+        "    \"pools\": [ { \"pool\": \"10.0.0.10-10.0.0.100\" } ],"
+        "    \"reservation-mode\": \"disabled\","
+        "    \"reservations\": [ "
+        "       {"
+        "         \"hw-address\": \"aa:bb:cc:dd:ee:ff\","
+        "         \"ip-address\": \"10.0.0.65\""
+        "       }"
+        "    ]"
+        "} ]"
+    "}",
+
+// Configuration 14
+    "{ \"interfaces-config\": {"
+        "      \"interfaces\": [ \"*\" ]"
+        "},"
+        "\"valid-lifetime\": 600,"
+        "\"subnet4\": [ { "
+        "    \"subnet\": \"10.0.0.0/24\","
+        "    \"pools\": [ { \"pool\": \"10.0.0.10-10.0.0.100\" } ],"
+        "    \"reservation-mode\": \"out-of-pool\","
+        "    \"reservations\": [ "
+        "       {"
+        "         \"hw-address\": \"aa:bb:cc:dd:ee:ff\","
+        "         \"ip-address\": \"10.0.0.200\""
+        "       },"
+        "       {"
+        "         \"hw-address\": \"11:22:33:44:55:66\","
+        "         \"ip-address\": \"10.0.0.65\""
+        "       }"
+        "    ]"
+        "} ]"
     "}"
 };
 
@@ -257,7 +506,7 @@ public:
         isc::stats::StatsMgr::instance().removeAll();
     }
 
-    /// @brief Desctructor.
+    /// @brief Destructor.
     ///
     /// Cleans up statistics after the test.
     ~DORATest() {
@@ -288,6 +537,18 @@ public:
     /// and then DHCPREQUEST to renew lease.
     void oneAllocationOverlapTest(const std::string& clientid_a,
                                   const std::string& clientid_b);
+
+    /// @brief Test that the client using the same hardware address but
+    /// multiple client identifiers will obtain multiple leases.
+    ///
+    /// This reflects the scenario of the OS installation over the network
+    /// when BIOS, installer and the host request DHCPv4 lease assignment
+    /// using the same MAC address/interface but generating different
+    /// client identifiers.
+    ///
+    /// @param config_index Index of the configuration within the
+    /// @c DORA_CONFIGS array.
+    void testMultiStageBoot(const unsigned int config_index);
 
     /// @brief Interface Manager's fake configuration control.
     IfaceMgrTestConfig iface_mgr_test_config_;
@@ -499,7 +760,7 @@ TEST_F(DORATest, initRebootRequest) {
     EXPECT_EQ(DHCPNAK, static_cast<int>(resp->getType()));
 
     // Change client identifier. The server should treat the request
-    // as a resquest from unknown client and ignore it.
+    // as a request from unknown client and ignore it.
     client.includeClientId("12:34");
     ASSERT_NO_THROW(client.doRequest());
     ASSERT_FALSE(client.getContext().response_);
@@ -780,7 +1041,7 @@ TEST_F(DORATest, reservation) {
 // DUID carried in the Client Identifier option.
 TEST_F(DORATest, reservationByDUID) {
     Dhcp4Client client(Dhcp4Client::SELECTING);
-    // Use relay agent so as the circuit-id can be inserted.
+    // Use relay agent.
     client.useRelay(true, IOAddress("10.0.0.1"), IOAddress("10.0.0.2"));
     // Modify HW address so as the server doesn't assign reserved
     // address by HW address.
@@ -830,6 +1091,31 @@ TEST_F(DORATest, reservationByCircuitId) {
     ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
     // Make sure that the client has got the lease for the reserved address.
     ASSERT_EQ("10.0.0.9", client.config_.lease_.addr_.toText());
+}
+
+// This test checks that it is possible to make a reservation by
+// client-id.
+TEST_F(DORATest, reservationByClientId) {
+    Dhcp4Client client(Dhcp4Client::SELECTING);
+    // Use relay agent to make sure that the desired subnet is
+    // selected for our client.
+    client.useRelay(true, IOAddress("10.0.0.20"), IOAddress("10.0.0.21"));
+    // Specify client identifier.
+    client.includeClientId("01:11:22:33:44:55:66");
+
+    // Configure DHCP server.
+    configure(DORA_CONFIGS[2], *client.getServer());
+    // Client A performs 4-way exchange and should obtain a reserved
+    // address.
+    ASSERT_NO_THROW(client.doDORA(boost::shared_ptr<
+                                  IOAddress>(new IOAddress("0.0.0.0"))));
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    Pkt4Ptr resp = client.getContext().response_;
+    // Make sure that the server has responded with DHCPACK.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+    // Make sure that the client has got the lease for the reserved address.
+    ASSERT_EQ("10.0.0.1", client.config_.lease_.addr_.toText());
 }
 
 // This test verifies that order in which host identifiers are used to
@@ -987,6 +1273,32 @@ TEST_F(DORATest, changingHWAddress) {
     EXPECT_NE(client.config_.lease_.addr_, leased_address);
     // Check that the client id is not present in the lease.
     EXPECT_FALSE(client.config_.lease_.client_id_);
+}
+
+// This test verifies that the server assigns reserved values for the
+// siaddr, sname and file fields carried within DHCPv4 message.
+TEST_F(DORATest, messageFieldsReservations) {
+    // Client has a reservation.
+    Dhcp4Client client(Dhcp4Client::SELECTING);
+    // Set explicit HW address so as it matches the reservation in the
+    // configuration used below.
+    client.setHWAddress("aa:bb:cc:dd:ee:ff");
+    // Configure DHCP server.
+    configure(DORA_CONFIGS[6], *client.getServer());
+    // Client performs 4-way exchange and should obtain a reserved
+    // address and fixed fields.
+    ASSERT_NO_THROW(client.doDORA(boost::shared_ptr<
+                                  IOAddress>(new IOAddress("0.0.0.0"))));
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    Pkt4Ptr resp = client.getContext().response_;
+    // Make sure that the server has responded with DHCPACK.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+
+    // Check that the reserved values have been assigned.
+    EXPECT_EQ("10.0.0.7", client.config_.siaddr_.toText());
+    EXPECT_EQ("some-name.example.org", client.config_.sname_);
+    EXPECT_EQ("bootfile.efi", client.config_.boot_file_name_);
 }
 
 // This test checks the following scenario:
@@ -1179,7 +1491,7 @@ TEST_F(DORATest, reservationsWithConflicts) {
 
     // Client A performs 4-way exchange.
     client.setState(Dhcp4Client::SELECTING);
-    // Revert to the broadcast address for the selcting client.
+    // Revert to the broadcast address for the selecting client.
     client.setDestAddress(IOAddress::IPV4_BCAST_ADDRESS());
     // Obtain a lease from the server using the 4-way exchange.
     ASSERT_NO_THROW(client.doDORA(boost::shared_ptr<
@@ -1216,6 +1528,131 @@ TEST_F(DORATest, reservationsWithConflicts) {
     ASSERT_EQ(in_pool_addr, clientB.config_.lease_.addr_);
 }
 
+// This test verifies that the allocation engine ignores reservations when
+// reservation-mode is set to "disabled".
+TEST_F(DORATest, reservationModeDisabled) {
+    // Client has a reservation.
+    Dhcp4Client client(Dhcp4Client::SELECTING);
+    // Set explicit HW address so as it matches the reservation in the
+    // configuration used below.
+    client.setHWAddress("aa:bb:cc:dd:ee:ff");
+    // Configure DHCP server. In this configuration the reservation mode is
+    // set to disabled. Thus, the server should ignore the reservation for
+    // this client.
+    configure(DORA_CONFIGS[13], *client.getServer());
+    // Client requests the 10.0.0.50 address and the server should assign it
+    // as it ignores the reservation in the current mode.
+    ASSERT_NO_THROW(client.doDORA(boost::shared_ptr<
+                                  IOAddress>(new IOAddress("10.0.0.50"))));
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    Pkt4Ptr resp = client.getContext().response_;
+    // Make sure that the server has responded with DHCPACK.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+
+    // Check that the requested IP address was assigned.
+    ASSERT_EQ("10.0.0.50", client.config_.lease_.addr_.toText());
+
+    // Reconfigure the server to respect the host reservations.
+    configure(DORA_CONFIGS[12], *client.getServer());
+
+    // The client requests the previously allocated address again, but the
+    // server should allocate the reserved address this time.
+    ASSERT_NO_THROW(client.doDORA(boost::shared_ptr<
+                                  IOAddress>(new IOAddress("10.0.0.50"))));
+    // Check that the reserved IP address has been assigned.
+    ASSERT_EQ("10.0.0.65", client.config_.lease_.addr_.toText());
+}
+
+// This test verifies that allocation engine assigns a reserved address to
+// the client which doesn't own this reservation. We want to avoid such
+// cases in the real deployments, but this is just a test that the allocation
+// engine skips checking if the reservation exists when it allocates an
+// address. In the real deployment the reservation simply wouldn't exist.
+TEST_F(DORATest, reservationIgnoredInDisabledMode) {
+    // Client has a reservation.
+    Dhcp4Client client(Dhcp4Client::SELECTING);
+    // Set MAC address which doesn't match the reservation configured.
+    client.setHWAddress("11:22:33:44:55:66");
+    // Configure DHCP server. In this configuration the reservation mode is
+    // set to disabled. Any client should be able to hijack the reserved
+    // address.
+    configure(DORA_CONFIGS[13], *client.getServer());
+    // Client requests the 10.0.0.65 address reserved for another client.
+    ASSERT_NO_THROW(client.doDORA(boost::shared_ptr<
+                                  IOAddress>(new IOAddress("10.0.0.65"))));
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    Pkt4Ptr resp = client.getContext().response_;
+    // Make sure that the server has responded with DHCPACK.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+
+    // Check that the address was hijacked.
+    ASSERT_EQ("10.0.0.65", client.config_.lease_.addr_.toText());
+}
+
+// This test verifies that in pool reservations are ignored when the
+// reservation mode is set to "out-of-pool".
+TEST_F(DORATest, reservationModeOutOfPool) {
+    // Create the first client for which we have a reservation out of the
+    // dynamic pool.
+    Dhcp4Client clientA(Dhcp4Client::SELECTING);
+    clientA.setHWAddress("aa:bb:cc:dd:ee:ff");
+    // Configure the server to respect out of the pool reservations.
+    configure(DORA_CONFIGS[14], *clientA.getServer());
+    // The client for which we have a reservation is doing 4-way exchange
+    // and requests a different address than reserved. The server should
+    // allocate the reserved address to this client.
+    ASSERT_NO_THROW(clientA.doDORA(boost::shared_ptr<
+                                   IOAddress>(new IOAddress("10.0.0.40"))));
+    // Make sure that the server responded.
+    ASSERT_TRUE(clientA.getContext().response_);
+    Pkt4Ptr resp = clientA.getContext().response_;
+    // Make sure that the server has responded with DHCPACK.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+    // Check that the server allocated the reserved address.
+    ASSERT_EQ("10.0.0.200", clientA.config_.lease_.addr_.toText());
+
+    // Create another client which has a reservation within the pool.
+    // The server should ignore this reservation in the current mode.
+    Dhcp4Client clientB(clientA.getServer(), Dhcp4Client::SELECTING);
+    clientB.setHWAddress("11:22:33:44:55:66");
+    // This client is requesting a different address than reserved. The
+    // server should allocate this address to the client.
+    ASSERT_NO_THROW(clientB.doDORA(boost::shared_ptr<
+                                   IOAddress>(new IOAddress("10.0.0.40"))));
+    // Make sure that the server responded.
+    ASSERT_TRUE(clientB.getContext().response_);
+    resp = clientB.getContext().response_;
+    // Make sure that the server has responded with DHCPACK.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+    // Check that the requested address was assigned.
+    ASSERT_EQ("10.0.0.40", clientB.config_.lease_.addr_.toText());
+}
+
+// This test verifies that the in-pool reservation can be assigned to
+// the client not owning this reservation when the reservation mode is
+// set to "out-of-pool".
+TEST_F(DORATest, reservationIgnoredInOutOfPoolMode) {
+    // Create the first client for which we have a reservation out of the
+    // dynamic pool.
+    Dhcp4Client client(Dhcp4Client::SELECTING);
+    client.setHWAddress("12:34:56:78:9A:BC");
+    // Configure the server to respect out of the pool reservations only.
+    configure(DORA_CONFIGS[14], *client.getServer());
+    // The client which doesn't have a reservation is trying to hijack
+    // the reserved address and it should succeed.
+    ASSERT_NO_THROW(client.doDORA(boost::shared_ptr<
+                                   IOAddress>(new IOAddress("10.0.0.65"))));
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    Pkt4Ptr resp = client.getContext().response_;
+    // Make sure that the server has responded with DHCPACK.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+    // Check that the server allocated the requested address.
+    ASSERT_EQ("10.0.0.65", client.config_.lease_.addr_.toText());
+}
+
 /// This test verifies that after a client completes its DORA exchange,
 /// appropriate statistics are updated.
 TEST_F(DORATest, statisticsDORA) {
@@ -1243,7 +1680,7 @@ TEST_F(DORATest, statisticsDORA) {
     ObservationPtr pkt4_ack_sent = mgr.getObservation("pkt4-ack-sent");
     ObservationPtr pkt4_sent = mgr.getObservation("pkt4-sent");
 
-    // All expected statstics must be present.
+    // All expected statistics must be present.
     ASSERT_TRUE(pkt4_received);
     ASSERT_TRUE(pkt4_discover_received);
     ASSERT_TRUE(pkt4_offer_sent);
@@ -1305,7 +1742,7 @@ TEST_F(DORATest, statisticsNAK) {
     ObservationPtr pkt4_nak_sent = mgr.getObservation("pkt4-nak-sent");
     ObservationPtr pkt4_sent = mgr.getObservation("pkt4-sent");
 
-    // All expected statstics must be present.
+    // All expected statistics must be present.
     ASSERT_TRUE(pkt4_received);
     ASSERT_TRUE(pkt4_request_received);
     ASSERT_FALSE(pkt4_ack_sent); // No acks were sent, no such statistic expected.
@@ -1318,5 +1755,289 @@ TEST_F(DORATest, statisticsNAK) {
     EXPECT_EQ(1, pkt4_nak_sent->getInteger().first);
     EXPECT_EQ(1, pkt4_sent->getInteger().first);
 }
+
+void
+DORATest::testMultiStageBoot(const unsigned int config_index) {
+    Dhcp4Client client(Dhcp4Client::SELECTING);
+    // Configure DHCP server.
+    ASSERT_NO_THROW(configure(DORA_CONFIGS[config_index],
+                              *client.getServer()));
+
+    // Stage 1: get the first lease for our client. In PXE boot, it would be
+    // a stage when the BIOS requests a lease.
+
+    // Include client id apart from the MAC address.
+    client.includeClientId("10:21:32:AB:CD:EF");
+
+    ASSERT_NO_THROW(client.doDORA());
+
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    Pkt4Ptr resp = client.getContext().response_;
+    // Make sure that the server has responded with DHCPACK.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+
+    // Make sure that the client has got the lease which belongs
+    // to a pool.
+    IOAddress leased_address1 = client.config_.lease_.addr_;
+    Subnet4Ptr subnet = CfgMgr::instance().getCurrentCfg()->getCfgSubnets4()->
+        selectSubnet(leased_address1);
+    ASSERT_TRUE(subnet);
+    // Make sure that the address has been allocated from the dynamic pool.
+    ASSERT_TRUE(subnet->inPool(Lease::TYPE_V4, leased_address1));
+
+    // Stage 2: the client with a given MAC address has a lease in the
+    // lease database. The installer comes up and uses the same MAC address
+    // but generates a different client id. The server should treat the
+    // client with modified client identifier as a different client and
+    // create a new lease for it.
+
+    // Modify client identifier.
+    client.includeClientId("11:54:45:AB:AA:FE");
+
+    ASSERT_NO_THROW(client.doDORA());
+
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    resp = client.getContext().response_;
+    // Make sure that the server has responded with DHCPACK.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+
+    // Make sure that the client has got the lease which belongs
+    // to a pool.
+    IOAddress leased_address2 = client.config_.lease_.addr_;
+    // Make sure that the address has been allocated from the dynamic pool.
+    ASSERT_TRUE(subnet->inPool(Lease::TYPE_V4, leased_address2));
+
+    // The client should have got a new lease.
+    ASSERT_NE(leased_address1, leased_address2);
+
+    // Modify client identifier again.
+    client.includeClientId("22:34:AC:BE:44:54");
+
+    ASSERT_NO_THROW(client.doDORA());
+
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    resp = client.getContext().response_;
+    // Make sure that the server has responded with DHCPACK.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+
+    // Make sure that the client has got the lease which belongs
+    // to a pool.
+    IOAddress leased_address3 = client.config_.lease_.addr_;
+    // Make sure that the address has been allocated from the dynamic pool.
+    ASSERT_TRUE(subnet->inPool(Lease::TYPE_V4, leased_address3));
+
+    // The client should have got a new lease.
+    ASSERT_NE(leased_address1, leased_address3);
+    ASSERT_NE(leased_address2, leased_address3);
+}
+
+
+// Test that the client using the same hardware address but multiple
+// client identifiers will obtain multiple leases.
+TEST_F(DORATest, multiStageBoot) {
+    // DORA_CONFIGS[0] to be used for server configuration.
+    testMultiStageBoot(0);
+}
+
+// This test verifies that custom server identifier can be specified for
+// a subnet.
+TEST_F(DORATest, customServerIdentifier) {
+    Dhcp4Client client1(Dhcp4Client::SELECTING);
+    // Configure DHCP server.
+    ASSERT_NO_THROW(configure(DORA_CONFIGS[7], *client1.getServer()));
+
+    ASSERT_NO_THROW(client1.doDORA());
+    // Make sure that the server responded.
+    ASSERT_TRUE(client1.getContext().response_);
+    Pkt4Ptr resp = client1.getContext().response_;
+    // Make sure that the server has responded with DHCPACK.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+    // The explicitly configured server identifier should take precedence
+    // over generated server identifier.
+    EXPECT_EQ("1.2.3.4", client1.config_.serverid_.toText());
+
+    // Repeat the test for different subnet.
+    Dhcp4Client client2(client1.getServer(), Dhcp4Client::SELECTING);
+    client2.setIfaceName("eth1");
+
+    ASSERT_NO_THROW(client2.doDORA());
+    ASSERT_TRUE(client2.getContext().response_);
+    resp = client2.getContext().response_;
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+    EXPECT_EQ("2.3.4.5", client2.config_.serverid_.toText());
+
+    // Create relayed client which will be assigned a lease from the third
+    // subnet. This subnet inherits server identifier value from the global
+    // scope.
+    Dhcp4Client client3(client1.getServer(), Dhcp4Client::SELECTING);
+    client3.useRelay(true, IOAddress("10.2.3.4"));
+
+    ASSERT_NO_THROW(client3.doDORA());
+    ASSERT_TRUE(client3.getContext().response_);
+    resp = client3.getContext().response_;
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+    EXPECT_EQ("3.4.5.6", client3.config_.serverid_.toText());
+}
+
+// This test verifies that reserved lease is not assigned to a client which
+// identifier doesn't match the identifier in the reservation.
+TEST_F(DORATest, changingCircuitId) {
+    Dhcp4Client client(Dhcp4Client::SELECTING);
+    client.setHWAddress("aa:bb:cc:dd:ee:ff");
+    // Use relay agent so as the circuit-id can be inserted.
+    client.useRelay(true, IOAddress("10.0.0.1"), IOAddress("10.0.0.2"));
+
+    // Configure DHCP server.
+    configure(DORA_CONFIGS[11], *client.getServer());
+
+    // Send DHCPDISCOVER.
+    boost::shared_ptr<IOAddress> requested_address(new IOAddress("10.0.0.9"));
+    ASSERT_NO_THROW(client.doDiscover(requested_address));
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    Pkt4Ptr resp = client.getContext().response_;
+    // Make sure that the server has responded with DHCPOFFER
+    ASSERT_EQ(DHCPOFFER, static_cast<int>(resp->getType()));
+    // Make sure that the client has been offerred a different address
+    // given that circuit-id is not used.
+    EXPECT_NE("10.0.0.9", resp->getYiaddr().toText());
+
+    // Specify circuit-id matching the one in the configuration.
+    client.setCircuitId("charter950");
+
+    // Send DHCPDISCOVER.
+    ASSERT_NO_THROW(client.doDiscover());
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    resp = client.getContext().response_;
+    // Make sure that the server has responded with DHCPOFFER
+    ASSERT_EQ(DHCPOFFER, static_cast<int>(resp->getType()));
+    // Make sure that the client has been offerred reserved address given that
+    // matching circuit-id has been specified.
+    EXPECT_EQ("10.0.0.9", resp->getYiaddr().toText());
+
+    // Let's now change the circuit-id.
+    client.setCircuitId("gdansk");
+
+    // The client requests offerred address but should be refused this address
+    // given that the circuit-id is not matching.
+    ASSERT_NO_THROW(client.doRequest());
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    resp = client.getContext().response_;
+    // The client should be refused this address.
+    EXPECT_EQ(DHCPNAK, static_cast<int>(resp->getType()));
+
+    // In this case, the client falls back to the 4-way exchange and should be
+    // allocated an address from the dynamic pool.
+    ASSERT_NO_THROW(client.doDORA());
+    // Make sure that the server responded.
+    ASSERT_TRUE(client.getContext().response_);
+    resp = client.getContext().response_;
+    // The client should be allocated some address.
+    ASSERT_EQ(DHCPACK, static_cast<int>(resp->getType()));
+    EXPECT_NE("10.0.0.9", client.config_.lease_.addr_.toText());
+}
+
+// Starting tests which require MySQL backend availability. Those tests
+// will not be executed if Kea has been compiled without the
+// --with-mysql.
+#ifdef HAVE_MYSQL
+
+/// @brief Test fixture class for the test utilizing MySQL database backend.
+class DORAMySQLTest : public DORATest {
+public:
+    /// @brief Constructor.
+    ///
+    /// Recreates MySQL schema for a test.
+    DORAMySQLTest() : DORATest() {
+        destroyMySQLSchema();
+        createMySQLSchema();
+    }
+
+    /// @brief Destructor.
+    ///
+    /// Destroys MySQL schema.
+    virtual ~DORAMySQLTest() {
+        destroyMySQLSchema();
+    }
+};
+
+// Test that the client using the same hardware address but multiple
+// client identifiers will obtain multiple leases (MySQL lease database).
+TEST_F(DORAMySQLTest, multiStageBoot) {
+    // DORA_CONFIGS[9] to be used for server configuration.
+    testMultiStageBoot(8);
+}
+
+#endif
+
+// Starting tests which require MySQL backend availability. Those tests
+// will not be executed if Kea has been compiled without the
+// --with-pgsql.
+#ifdef HAVE_PGSQL
+
+/// @brief Test fixture class for the test utilizing PostgreSQL database backend.
+class DORAPgSQLTest : public DORATest {
+public:
+    /// @brief Constructor.
+    ///
+    /// Recreates PgSQL schema for a test.
+    DORAPgSQLTest() : DORATest() {
+        destroyPgSQLSchema();
+        createPgSQLSchema();
+    }
+
+    /// @brief Destructor.
+    ///
+    /// Destroys PgSQL schema.
+    virtual ~DORAPgSQLTest() {
+        destroyPgSQLSchema();
+    }
+};
+
+// Test that the client using the same hardware address but multiple
+// client identifiers will obtain multiple leases (PostgreSQL lease database).
+TEST_F(DORAPgSQLTest, multiStageBoot) {
+    // DORA_CONFIGS[9] to be used for server configuration.
+    testMultiStageBoot(9);
+}
+
+#endif
+
+#ifdef HAVE_CQL
+
+// Starting tests which require Cassandra backend availability. Those tests
+// will not be executed if Kea has been compiled without the
+// --with-cql.
+class DORACQLTest : public DORATest {
+public:
+    /// @brief Constructor.
+    ///
+    /// Recreates CQL schema for a test.
+    DORACQLTest() : DORATest() {
+        destroyCqlSchema(false, true);
+        createCqlSchema(false, true);
+    }
+
+    /// @brief Destructor.
+    ///
+    /// Destroys CQL schema.
+    virtual ~DORACQLTest() {
+        destroyCqlSchema(false, true);
+    }
+};
+
+// Test that the client using the same hardware address but multiple
+// client identifiers will obtain multiple leases (CQL lease database).
+TEST_F(DORACQLTest, multiStageBoot) {
+    // DORA_CONFIGS[10] to be used for server configuration.
+    testMultiStageBoot(10);
+}
+
+#endif
 
 } // end of anonymous namespace

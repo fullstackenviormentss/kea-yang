@@ -1,4 +1,4 @@
-// Copyright (C) 2011-2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2011-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,6 +7,7 @@
 #ifndef DHCPV4_SRV_H
 #define DHCPV4_SRV_H
 
+#include <asiolink/io_service.h>
 #include <dhcp/dhcp4.h>
 #include <dhcp/pkt4.h>
 #include <dhcp/option.h>
@@ -14,15 +15,18 @@
 #include <dhcp/option4_client_fqdn.h>
 #include <dhcp/option_custom.h>
 #include <dhcp_ddns/ncr_msg.h>
-#include <dhcpsrv/d2_client_mgr.h>
-#include <dhcpsrv/subnet.h>
 #include <dhcpsrv/alloc_engine.h>
 #include <dhcpsrv/cfg_option.h>
+#include <dhcpsrv/callout_handle_store.h>
+#include <dhcpsrv/d2_client_mgr.h>
+#include <dhcpsrv/network_state.h>
+#include <dhcpsrv/subnet.h>
 #include <hooks/callout_handle.h>
 #include <dhcpsrv/daemon.h>
 
 #include <boost/noncopyable.hpp>
 
+#include <functional>
 #include <iostream>
 #include <queue>
 
@@ -118,6 +122,13 @@ public:
         return (cfg_option_list_);
     }
 
+    /// @brief Sets reserved values of siaddr, sname and file in the
+    /// server's response.
+    void setReservedMessageFields();
+
+    /// @brief Assigns classes retrieved from host reservation database.
+    void setReservedClientClasses();
+
 private:
 
     /// @brief Copies default parameters from client's to server's message
@@ -181,6 +192,10 @@ typedef boost::shared_ptr<Dhcpv4Exchange> Dhcpv4ExchangePtr;
 /// See the derived \ref ControlledDhcpv4Srv class for support for
 /// command and configuration updates over msgq.
 class Dhcpv4Srv : public Daemon {
+private:
+
+    /// @brief Pointer to IO service used by the server.
+    asiolink::IOServicePtr io_service_;
 
 public:
 
@@ -215,10 +230,15 @@ public:
     /// @brief Destructor. Used during DHCPv4 service shutdown.
     virtual ~Dhcpv4Srv();
 
+    /// @brief Returns pointer to the IO service used by the server.
+    asiolink::IOServicePtr& getIOService() {
+        return (io_service_);
+    }
+
     /// @brief returns Kea version on stdout and exit.
     /// redeclaration/redefinition. @ref Daemon::getVersion()
     static std::string getVersion(bool extended);
- 
+
     /// @brief Main server processing loop.
     ///
     /// Main server processing loop. Call the processing step routine
@@ -241,7 +261,10 @@ public:
     ///
     /// @param query A pointer to the packet to be processed.
     /// @param rsp A pointer to the response
-    void processPacket(Pkt4Ptr& query, Pkt4Ptr& rsp);
+    /// @param allow_packet_park Indicates if parking a packet is allowed.
+    void processPacket(Pkt4Ptr& query, Pkt4Ptr& rsp,
+                       bool allow_packet_park = true);
+
 
     /// @brief Instructs the server to shut down.
     void shutdown();
@@ -428,9 +451,11 @@ protected:
     /// Returns ACK message, NAK message, or NULL
     ///
     /// @param request a message received from client
+    /// @param [out] context pointer to the client context where allocated
+    /// and deleted leases are stored.
     ///
     /// @return ACK or NAK message
-    Pkt4Ptr processRequest(Pkt4Ptr& request);
+    Pkt4Ptr processRequest(Pkt4Ptr& request, AllocEngine::ClientContext4Ptr& context);
 
     /// @brief Processes incoming DHCPRELEASE messages.
     ///
@@ -438,7 +463,9 @@ protected:
     /// this function does not return anything.
     ///
     /// @param release message received from client
-    void processRelease(Pkt4Ptr& release);
+    /// @param [out] context pointer to the client context where released
+    /// lease is stored.
+    void processRelease(Pkt4Ptr& release, AllocEngine::ClientContext4Ptr& context);
 
     /// @brief Process incoming DHCPDECLINE messages.
     ///
@@ -447,7 +474,9 @@ protected:
     /// the client and if it does, calls @ref declineLease.
     ///
     /// @param decline message received from client
-    void processDecline(Pkt4Ptr& decline);
+    /// @param [out] context pointer to the client context where declined
+    /// lease is stored.
+    void processDecline(Pkt4Ptr& decline, AllocEngine::ClientContext4Ptr& context);
 
     /// @brief Processes incoming DHCPINFORM messages.
     ///
@@ -508,10 +537,24 @@ protected:
     /// - Subnet Mask,
     /// - Router,
     /// - Name Server,
-    /// - Domain Name.
+    /// - Domain Name,
+    /// - Server Identifier.
     ///
     /// @param ex DHCPv4 exchange holding the client's message to be checked.
     void appendBasicOptions(Dhcpv4Exchange& ex);
+
+    /// @brief Sets fixed fields of the outgoing packet.
+    ///
+    /// If the incoming packets belongs to a class and that class defines
+    /// next-server, server-hostname or boot-file-name, we need to set the
+    /// siaddr, sname or filename fields in the outgoing packet. Also, those
+    /// values can be defined for subnet or in reservations. The values
+    /// defined in reservation takes precedence over class values, which
+    /// in turn take precedence over subnet values.
+    ///
+    /// @param ex DHCPv4 exchange holding the client's message and the server's
+    ///           response to be adjusted.
+    void setFixedFields(Dhcpv4Exchange& ex);
 
     /// @brief Processes Client FQDN and Hostname Options sent by a client.
     ///
@@ -552,7 +595,7 @@ protected:
     /// server's response.
     void processClientName(Dhcpv4Exchange& ex);
 
-    /// @brief this is a prefix added to the contend of vendor-class option
+    /// @brief this is a prefix added to the content of vendor-class option
     ///
     /// If incoming packet has a vendor class option, its content is
     /// prepended with this prefix and then interpreted as a class.
@@ -575,11 +618,32 @@ private:
 
     /// @brief Process Hostname %Option sent by a client.
     ///
-    /// This function is called by the @c Dhcpv4Srv::processClientName when
-    /// the client has sent the Hostname option in its message to the server.
-    /// It comprises the actual logic to parse the Hostname option and
-    /// prepare the Hostname option to be sent back to the client in the
-    /// server's response.
+    /// This method is called by the @c Dhcpv4Srv::processClientName to
+    /// create an instance of the Hostname option to be returned to the
+    /// client. If this instance is created it is included in the response
+    /// message within the @c Dhcpv4Exchange object passed as an argument.
+    ///
+    /// The Hostname option instance is created if the client has included
+    /// Hostname option in its query to the server or if the client has
+    /// included Hostname option code in the Parameter Request List option.
+    /// In the former case, the server can use the Hostname supplied by the
+    /// client or replace it with a new hostname, depending on the server's
+    /// configuration. A reserved hostname takes precedence over a hostname
+    /// supplied by the client or auto generated hostname.
+    ///
+    /// If the 'qualifying-suffix' parameter is specified, its value is used
+    /// to qualify a hostname. For example, if the host reservation contains
+    /// a hostname 'marcin-laptop', and the qualifying suffix is
+    /// 'example.isc.org', the hostname returned to the client will be
+    /// 'marcin-laptop.example.isc.org'. If the 'qualifying-suffix' is not
+    /// specified (empty), the reserved hostname is returned to the client
+    /// unqualified.
+    ///
+    /// The 'qualifying-suffix' value is also used to qualify the hostname
+    /// supplied by the client, when this hostname is unqualified,
+    /// e.g. 'laptop-x'. If the supplied hostname is qualified, e.g.
+    /// 'laptop-x.example.org', the qualifying suffix will not be appended
+    /// to it.
     ///
     /// @param ex The exchange holding both the client's message and the
     /// server's response.
@@ -597,7 +661,9 @@ private:
     ///
     /// @param lease lease to be declined
     /// @param decline client's message
-    void declineLease(const Lease4Ptr& lease, const Pkt4Ptr& decline);
+    /// @param context reference to a client context
+    void declineLease(const Lease4Ptr& lease, const Pkt4Ptr& decline,
+                      AllocEngine::ClientContext4Ptr& context);
 
 protected:
 
@@ -630,12 +696,11 @@ protected:
 
     /// @brief Adds server identifier option to the server's response.
     ///
-    /// This method adds a server identifier to the DHCPv4 message. It expects
-    /// that the local (source) address is set for this message. If address is
-    /// not set, it will throw an exception. This method also expects that the
-    /// server identifier option is not present in the specified message.
-    /// Otherwise, it will throw an exception on attempt to add a duplicate
-    /// server identifier option.
+    /// This method adds a server identifier to the DHCPv4 message if it doesn't
+    /// exist yet. This is set to the local address on which the client's query has
+    /// been received with the exception of broadcast traffic and DHCPv4o6 query for
+    /// which a socket on the particular interface is found and its address is used
+    /// as server id.
     ///
     /// @note This method doesn't throw exceptions by itself but the underlying
     /// classes being used my throw. The reason for this method to not sanity
@@ -715,14 +780,18 @@ protected:
     /// @brief Selects a subnet for a given client's packet.
     ///
     /// @param query client's message
+    /// @param drop if it is true the packet will be dropped
     /// @return selected subnet (or NULL if no suitable subnet was found)
-    isc::dhcp::Subnet4Ptr selectSubnet(const Pkt4Ptr& query) const;
+    isc::dhcp::Subnet4Ptr selectSubnet(const Pkt4Ptr& query,
+                                       bool& drop) const;
 
     /// @brief Selects a subnet for a given client's DHCP4o6 packet.
     ///
     /// @param query client's message
+    /// @param drop if it is true the packet will be dropped
     /// @return selected subnet (or NULL if no suitable subnet was found)
-    isc::dhcp::Subnet4Ptr selectSubnet4o6(const Pkt4Ptr& query) const;
+    isc::dhcp::Subnet4Ptr selectSubnet4o6(const Pkt4Ptr& query,
+                                          bool& drop) const;
 
     /// indicates if shutdown is in progress. Setting it to true will
     /// initiate server shutdown procedure.
@@ -752,17 +821,31 @@ protected:
     /// @param pkt packet to be classified
     void classifyPacket(const Pkt4Ptr& pkt);
 
-    /// @brief Performs packet processing specific to a vendor class
+    /// @brief Perform deferred option unpacking.
     ///
-    /// If the selected subnet, query or response in the @c ex object is NULL
-    /// this method returns immediately and returns true.
+    /// @note Options 43 and 224-254 are processed after classification.
+    /// If a class configures a definition it is applied, if none
+    /// the global (user) definition is applied. For option 43
+    /// a last resort definition (same definition as used in previous Kea
+    /// versions) is applied when none is found.
     ///
-    /// @note This processing is a likely candidate to be pushed into hooks.
+    /// @param query Pointer to the client message.
+    void deferredUnpack(Pkt4Ptr& query);
+
+    /// @brief Executes pkt4_send callout.
     ///
-    /// @param ex The exchange holding both the client's message and the
-    /// server's response.
-    /// @return true if successful, false otherwise (will prevent sending response)
-    bool vendorClassSpecificProcessing(const Dhcpv4Exchange& ex);
+    /// @param callout_handle pointer to the callout handle.
+    /// @param query Pointer to a query.
+    /// @param rsp Pointer to a response.
+    void processPacketPktSend(hooks::CalloutHandlePtr& callout_handle,
+                              Pkt4Ptr& query, Pkt4Ptr& rsp);
+
+    /// @brief Executes buffer4_send callout and sends the response.
+    ///
+    /// @param callout_handle pointer to the callout handle.
+    /// @param rsp pointer to a response.
+    void processPacketBufferSend(hooks::CalloutHandlePtr& callout_handle,
+                                 Pkt4Ptr& rsp);
 
     /// @brief Allocation Engine.
     /// Pointer to the allocation engine that we are currently using
@@ -778,8 +861,7 @@ private:
     /// @note This is the first part of @ref classifyPacket
     ///
     /// @param pkt packet to be classified
-    /// @param classes a reference to added class names for logging
-    void classifyByVendor(const Pkt4Ptr& pkt, std::string& classes);
+    void classifyByVendor(const Pkt4Ptr& pkt);
 
     /// @private
     /// @brief Constructs netmask option based on subnet4
@@ -790,6 +872,12 @@ private:
 
     uint16_t port_;  ///< UDP port number on which server listens.
     bool use_bcast_; ///< Should broadcast be enabled on sockets (if true).
+
+protected:
+
+    /// @brief Holds information about disabled DHCP service and/or
+    /// disabled subnet/network scopes.
+    NetworkState network_state_;
 
 public:
     /// Class methods for DHCPv4-over-DHCPv6 handler

@@ -1,13 +1,16 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE book PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
-"http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd" [
-<!ENTITY mdash  "&#x2014;" >
-]>
+<!--
+ - Copyright (C) 2014-2018 Internet Systems Consortium, Inc. ("ISC")
+ -
+ - This Source Code Form is subject to the terms of the Mozilla Public
+ - License, v. 2.0. If a copy of the MPL was not distributed with this
+ - file, You can obtain one at http://mozilla.org/MPL/2.0/.
+-->
 
-  <chapter id="libdhcp">
-    <title>libdhcp++ library</title>
+<!-- Converted by db4-upgrade version 1.1 -->
+<chapter xmlns="http://docbook.org/ns/docbook" version="5.0" xml:id="libdhcp">
+    <title>The libdhcp++ Library</title>
     <para>
-      libdhcp++ is a common library written in C++ that handles
+      libdhcp++ is a library written in C++ that handles
       many DHCP-related tasks, including:
       <itemizedlist>
         <listitem>
@@ -32,7 +35,7 @@
 
 <!-- TODO: point to doxygen docs -->
 
-    <section id="iface-detect">
+    <section xml:id="iface-detect">
       <title>Interface detection and Socket handling</title>
       <para>Both the DHCPv4 and DHCPv6 components share network
       interface detection routines. Interface detection is
@@ -40,7 +43,7 @@
       OpenBSD), Mac OS X and Solaris 11 systems.</para>
 
       <para>DHCPv4 requires special raw socket processing to send and receive
-      packets from hosts that do not have IPv4 address assigned yet. Support
+      packets from hosts that do not have IPv4 address assigned. Support
       for this operation is implemented on Linux, FreeBSD, NetBSD and OpenBSD.
       It is likely that DHCPv4 component will not work in certain cases on
       other systems.</para>

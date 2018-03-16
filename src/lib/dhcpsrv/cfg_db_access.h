@@ -1,4 +1,4 @@
-// Copyright (C) 2016 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2016-2018 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,6 +6,9 @@
 
 #ifndef CFG_DBACCESS_H
 #define CFG_DBACCESS_H
+
+#include <cc/cfg_to_element.h>
+#include <dhcpsrv/database_connection.h>
 
 #include <boost/shared_ptr.hpp>
 #include <string>
@@ -61,13 +64,24 @@ public:
 
     /// @brief Creates instance of lease manager and host data source
     /// according to the configuration specified.
-    void createManagers() const;
+    ///
+    /// @param db_lost_callback function to invoke if connectivity to
+    /// either the lease or host managers, once established, is subsequently
+    /// lost.
+    void createManagers(DatabaseConnection::DbLostCallback db_lost_callback = 0) const;
 
-private:
+    /// @brief Unparse an access string
+    ///
+    /// @param dbaccess the database access string
+    /// @return a pointer to configuration
+    static
+    isc::data::ElementPtr toElementDbAccessString(const std::string& dbaccess);
+
+protected:
 
     /// @brief Returns lease or host database access string.
     ///
-    /// @param Access string without additional (appended) parameters.
+    /// @param access_string without additional (appended) parameters.
     std::string getAccessString(const std::string& access_string) const;
 
     /// @brief Parameters to be appended to the database access
@@ -87,6 +101,35 @@ typedef boost::shared_ptr<CfgDbAccess> CfgDbAccessPtr;
 
 /// @brief A pointer to the const @c CfgDbAccess.
 typedef boost::shared_ptr<const CfgDbAccess> ConstCfgDbAccessPtr;
+
+/// @brief utility class for unparsing
+struct CfgLeaseDbAccess : public CfgDbAccess, public isc::data::CfgToElement {
+    /// @brief Constructor
+    CfgLeaseDbAccess(const CfgDbAccess& super) : CfgDbAccess(super) { }
+
+    /// @brief Unparse
+    ///
+    /// @ref isc::data::CfgToElement::toElement
+    ///
+    /// @result a pointer to a configuration
+    virtual isc::data::ElementPtr toElement() const {
+        return (CfgDbAccess::toElementDbAccessString(lease_db_access_));
+    }
+};
+
+struct CfgHostDbAccess : public CfgDbAccess, public isc::data::CfgToElement {
+    /// @brief Constructor
+    CfgHostDbAccess(const CfgDbAccess& super) : CfgDbAccess(super) { }
+
+    /// @brief Unparse
+    ///
+    /// @ref isc::data::CfgToElement::toElement
+    ///
+    /// @result a pointer to a configuration
+    virtual isc::data::ElementPtr toElement() const {
+        return (CfgDbAccess::toElementDbAccessString(host_db_access_));
+    }
+};
 
 }
 }

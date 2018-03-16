@@ -1,4 +1,4 @@
-// Copyright (C) 2014-2015 Internet Systems Consortium, Inc. ("ISC")
+// Copyright (C) 2014-2017 Internet Systems Consortium, Inc. ("ISC")
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -26,7 +26,7 @@ const unsigned int MAX_BPF_OPEN_ATTEMPTS = 100;
 /// received on local loopback interface.
 const unsigned int BPF_LOCAL_LOOPBACK_HEADER_LEN = 4;
 
-/// The following structure defines a Berkely Packet Filter program to perform
+/// The following structure defines a Berkeley Packet Filter program to perform
 /// packet filtering. The program operates on Ethernet packets.  To help with
 /// interpretation of the program, for the types of Ethernet packets we are
 /// interested in, the header layout is:
@@ -137,7 +137,7 @@ struct bpf_insn ethernet_ip_udp_filter [] = {
 struct bpf_insn loopback_ip_udp_filter [] = {
     // Make sure this is an IP packet. The pseudo header comprises a 4-byte
     // long value identifying the address family, which should be set to
-    // AF_INET. The default value used here (0xFFFFFFFF) must be overriden
+    // AF_INET. The default value used here (0xFFFFFFFF) must be overridden
     // with htonl(AF_INET) from within the openSocket function.
     // #0
     BPF_STMT(BPF_LD + BPF_W + BPF_ABS, 0),
@@ -229,7 +229,7 @@ PktFilterBPF::openSocket(Iface& iface,
 
     // Open fallback socket first. If it fails, it will give us an indication
     // that there is another service (perhaps DHCP server) running.
-    // The function will throw an exception and effectivelly cease opening
+    // The function will throw an exception and effectively cease opening
     // the BPF device below.
     int fallback = openFallbackSocket(addr, port);
 
@@ -310,7 +310,7 @@ PktFilterBPF::openSocket(Iface& iface,
         close(fallback);
         close(sock);
         isc_throw(SocketConfigError, "Unable to obtain the required"
-                  " buffer legth for reads from BPF device");
+                  " buffer length for reads from BPF device");
     }
 
     if (buf_len < sizeof(bpf_hdr)) {
@@ -341,7 +341,7 @@ PktFilterBPF::openSocket(Iface& iface,
     // Configure the BPF program to receive unicast packets sent to the
     // specified address. The program will also allow packets sent to the
     // 255.255.255.255 broadcast address.
-    prog.bf_insns[8].k = static_cast<uint32_t>(addr);
+    prog.bf_insns[8].k = addr.toUint32();
 
     // Configure the BPF program to receive packets on the specified port.
     prog.bf_insns[11].k = port;
@@ -355,14 +355,14 @@ PktFilterBPF::openSocket(Iface& iface,
     }
 
     // Configure the BPF device to use the immediate mode. This ensures
-    // that the read function returns immediatelly, instead of waiting
+    // that the read function returns immediately, instead of waiting
     // for the kernel to fill up the buffer, which would likely cause
     // read hangs.
     int flag = 1;
     if (ioctl(sock, BIOCIMMEDIATE, &flag) < 0) {
         close(fallback);
         close(sock);
-        isc_throw(SocketConfigError, "Failed to set promiscious mode for"
+        isc_throw(SocketConfigError, "Failed to set promiscuous mode for"
                   " BPF device");
     }
 
@@ -411,10 +411,10 @@ PktFilterBPF::receive(Iface& iface, const SocketInfo& socket_info) {
     datalen = read(socket_info.sockfd_, iface.getReadBuffer(),
                    iface.getReadBufferSize());
     // If negative value is returned by read(), it indicates that an
-    // error occured. If returned value is 0, no data was read from the
+    // error occurred. If returned value is 0, no data was read from the
     // socket. In both cases something has gone wrong, because we expect
     // that a chunk of data is there. We signal the lack of data by
-    // returing an empty packet.
+    // returning an empty packet.
     if (datalen <= 0) {
         return Pkt4Ptr();
     }
@@ -490,7 +490,9 @@ PktFilterBPF::receive(Iface& iface, const SocketInfo& socket_info) {
 
     // On local loopback interface the ethernet header is not present.
     // Instead, there is a 4-byte long pseudo header containing the
-    // address family in the host byte order.
+    // address family in the host byte order. Note that this header
+    // is present in the received messages on OSX, but should not be
+    // included in the sent messages on OSX.
     if (iface.flag_loopback_) {
         if (buf.getLength() < BPF_LOCAL_LOOPBACK_HEADER_LEN) {
             isc_throw(SocketReadError, "packet received on local loopback"
@@ -554,13 +556,18 @@ PktFilterBPF::send(const Iface& iface, uint16_t sockfd, const Pkt4Ptr& pkt) {
         pkt->setLocalHWAddr(hwaddr);
     }
 
-    /// Loopback interface requires special treatment. It doesn't
-    /// use the ethernet header but rather a 4-bytes long pseudo header
-    /// holding an address family type (see bpf.c in OS sources).
+    // Loopback interface requires special treatment. It doesn't
+    // use the ethernet header but rather a 4-byte long pseudo header
+    // holding an address family type (see bpf.c in OS sources).
+    // On OSX, it even lacks pseudo header.
+#if !defined (OS_OSX)
     if (iface.flag_loopback_) {
         writeAFPseudoHeader(AF_INET, buf);
+    }
+#endif
 
-    } else {
+    // If this is not a loopback interface create Ethernet frame header.
+    if (!iface.flag_loopback_) {
         // Ethernet frame header.
         // Note that we don't validate whether HW addresses in 'pkt'
         // are valid because they are validated by the function called.
