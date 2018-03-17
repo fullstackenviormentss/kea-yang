@@ -1,6 +1,11 @@
 
 SUBDIRS = . tests
 
+SYSREPO_SRC=/home/thomson/devel/sysrepo
+
+NETCONF_INCLUDES=$(SYSREPO_SRC)/inc
+NETCONF_LIBS=-L$(SYSREPO_SRC)/build/src -L$(SYSREPO_SRC)/build/swig -lsysrepo -lSysrepo-cpp
+
 AM_CPPFLAGS = -I$(top_srcdir)/src/lib -I$(top_builddir)/src/lib
 AM_CPPFLAGS += -I$(top_srcdir)/src/bin -I$(top_builddir)/src/bin
 AM_CPPFLAGS += -I$(top_srcdir)/src -I$(top_builddir)/src
@@ -75,7 +80,7 @@ kea_netconf_LDADD += $(top_builddir)/src/lib/log/libkea-log.la
 kea_netconf_LDADD += $(top_builddir)/src/lib/util/threads/libkea-threads.la
 kea_netconf_LDADD += $(top_builddir)/src/lib/util/libkea-util.la
 kea_netconf_LDADD += $(top_builddir)/src/lib/exceptions/libkea-exceptions.la
-kea_netconf_LDADD += $(LOG4CPLUS_LIBS) $(CRYPTO_LIBS) $(BOOST_LIBS)
+kea_netconf_LDADD += $(LOG4CPLUS_LIBS) $(CRYPTO_LIBS) $(BOOST_LIBS) $(NETCONF_LIBS)
 
 
 kea_netconfdir = $(pkgdatadir)
