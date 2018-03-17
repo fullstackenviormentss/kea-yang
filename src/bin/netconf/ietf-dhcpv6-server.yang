@@ -239,7 +239,7 @@ module ietf-dhcpv6-server {
               }
               leaf rapid-commit {
                 type boolean;
-                mandatory true;
+                mandatory false;
                 description "A boolean value specifies whether the pool
                 supports client-server exchanges involving two messages.";
               }
@@ -312,7 +312,7 @@ module ietf-dhcpv6-server {
               }
               leaf rapid-commit {
                 type boolean;
-                mandatory true;
+                mandatory false;
                 description "A boolean value specifies whether the server
                 support client-server exchanges involving two messages defined.";
               }
@@ -320,16 +320,16 @@ module ietf-dhcpv6-server {
                 type string;
                 description "client class";
               }
-              leaf max-pd-space-utlization {
+              leaf max-pd-space-utilization {
                 type threshold;
-                mandatory true;
+                mandatory false;
                 description "Maximum utilization of pd space in this pool";
               }
               leaf option-set-id {
                 type leafref {
                     path "/server/server-config/option-sets/option-set/option-set-id";
                   }
-                  mandatory true;
+                  mandatory false;
                   description "The ID field of relevant option-set to be
                     provisioned to clients of this prefix-pool.";
               }
