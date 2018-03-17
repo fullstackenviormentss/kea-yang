@@ -4,7 +4,7 @@ This file contains instruction how to set up an environment that
 allows doing experiments with Sysrepo plugin that is able to receive
 configuration from Sysrepo and send it to Kea.
 
-## Install sysrepo and netopeer2 ##
+## Install sysrepo and netopeer2 (also docker tips) ##
 
 See http://kea.isc.org/wiki/NetconfHackathon for details.
 
@@ -16,14 +16,14 @@ docker pull sysrepo/sysrepo-netopeer2:latest
 docker run -v/path/on/your/host:/opt/dev sysrepo/sysrepo-netopeer2:latest
 ```
 
-Not log into the system using:
+You can then log into the system using:
 ```bash
 # docker ps
-# see the container id
+<see the container id>
 docker exec -it <container id> /bin/bash
 ```
 
-After the changes to the container are made, commit them:
+If you want to keep your changes in the container, commit them:
 ```bash
 docker commit <containerid> sysrepo-netopeer2:kea1
 ```
@@ -37,6 +37,7 @@ Get the rfcstrip tool from http://yang-central.org
 rfcstrip draft-ietf-dhc-dhcpv6-yang-06.txt
 ```
 
+...
 
 
 ## Install and setup Kea
@@ -53,14 +54,14 @@ make
 Refer to Kea User's Guide to details.
 
 2. Run Kea with a config file.
-You may use one of the examples from kea-configs/kea-cfg* as a
+You may use one of the examples from kea-dhcp6-netconf.conf in src/bin/netconf/configs as a
 template. One item necessary for Sysrepo integration to work is to
 have control socket defined. For example:
 
 ```json
       "control-socket": {
           "socket-type": "unix",
-          "socket-name": "/tmp/kea-control-channel"
+          "socket-name": "/tmp/kea-dhcp6-ctrl.sock"
       },
 ```
 
