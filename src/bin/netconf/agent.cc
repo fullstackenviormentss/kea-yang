@@ -51,6 +51,10 @@ bool NetconfAgent::run() {
     return (true);
 }
 
+void NetconfAgent::run_one() {
+    // Implement callbacks here.
+}
+
 bool NetconfAgent::connectSysrepo() {
     // Connect to sysrepo
 
