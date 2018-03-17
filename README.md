@@ -149,6 +149,88 @@ to Kea.
 sysrepocfg --export=/tmp/backup.json --format=json --datastore=startup  ietf-kea-dhcpv6
 ```
 
+## Using sysrepo with docker containers
+
+1. Install latest docker version.
+
+On ubuntu just follow the steps in:
+
+https://docs.docker.com/install/linux/docker-ce/ubuntu/
+
+Eg:
+```bash
+sudo apt-get remove docker docker-engine docker.io
+
+sudo apt-get install \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    software-properties-common
+
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+
+sudo add-apt-repository \
+   "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+   $(lsb_release -cs) \
+   stable"
+
+sudo apt-get update
+
+sudo apt-get install docker-ce
+```
+2. Pull the container
+
+choose the latest stable repo:
+```bash
+docker pull sysrepo/sysrepo-netopeer2:latest
+```
+or use the development version:
+```bash
+docker pull sysrepo/sysrepo-netopeer2:devel
+```
+
+3. Prepare the container
+ - name the container and start it:
+```bash
+docker run -d --name sysrepo -v /local/persistent_path:/mnt sysrepo/sysrepo-netopeer2
+```
+ - connect to the container:
+'''bash
+docker exec -it sysrepo bash
+'''
+ - set the root password:
+```bash
+passwd
+```
+ - list installed yang modules inside netopeer2-server (the storage server):
+```bash
+sysrepoctl -l
+```
+ - install the dhcpv6 server model (ietf-dhcpv6-types.yang, ietf-dhcpv6-options.yang, ietf-dhcpv6-server.yang):
+```bash
+cd /path/to/yang/models/to/install
+
+sysrepoctl -i -g ietf-dhcpv6-server.yang -s /etc/sysrepo/yang/ -s ./
+```
+ - list installed yang modules inside netopeer2-server to see the new modules installed successfully:
+```bash
+sysrepoctl -l
+```
+ - connect to the netopeer2-server with netopeer2-cli and display content:
+```bash
+netopeer2-cli
+ -> connect
+Interactive SSH Authentication
+Type your password:
+Password:
+ -> get
+```
+
+4. Save the container state
+```bash
+docker commit sysrepo sysrepo/sysrepo-netopeer2:updated
+```
+
 ---------------------
 
 Tools that may be useful to look at:
