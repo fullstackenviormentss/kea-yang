@@ -18,9 +18,11 @@ class TranslatorNetworkRanges : public Translator {
  public:
     TranslatorNetworkRanges(const std::string& xpath);
 
+    
+
 };
 
 };
 };
 
-#endif TRANSLATOR_NETWORK_RANGES_H
+#endif /* TRANSLATOR_NETWORK_RANGES_H */

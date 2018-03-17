@@ -9,6 +9,7 @@
 #include <dhcpsrv/cfgmgr.h>
 #include <netconf/agent.h>
 #include <netconf/netconf_log.h>
+#include <exceptions/exceptions.h>
 #include <iostream>
 
 using namespace std;
@@ -103,11 +104,11 @@ main(int argc, char* argv[]) {
         // And run the main loop of the server.
         agent.run();
 
-        LOG_INFO(netconf_logger, NETCONF_SHUTDOWN);
+        LOG_INFO(netconf_logger, NETCONF_AGENT_SHUTDOWN);
 
-    } catch (const isc::exception& ex) {
+    } catch (const isc::Exception& ex) {
         // First, we parint the error on stderr (that should always work)
-        cerr "ERROR:" << ex.what() << endl;
+        cerr << "ERROR:" << ex.what() << endl;
 
     }
 

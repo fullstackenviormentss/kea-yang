@@ -30,7 +30,7 @@ if HAVE_GTEST
 
 TESTS += netconf_unittests
 
-netconf_unittests_SOURCES  = netconf_unittest.cc
+netconf_unittests_SOURCES  = run_unittest.cc
 
 netconf_unittests_CPPFLAGS = $(AM_CPPFLAGS) $(GTEST_INCLUDES)
 netconf_unittests_LDFLAGS = $(AM_LDFLAGS) $(CRYPTO_LDFLAGS)

@@ -4,7 +4,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-$NAMESPACE isc::dhcp
+$NAMESPACE isc::netconf
 
 % NETCONF_AGENT_STARTING Kea netconf agent (version %1) is starting with process-id %2
 Describe it later.
@@ -16,3 +16,5 @@ Describe it later.
 Describe it later.
 
 
+% NETCONF_EXCEPTION Exception encountered: %1
+Oops.

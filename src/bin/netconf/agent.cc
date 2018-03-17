@@ -5,15 +5,21 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include <config.h>
+#include <netconf/netconf_log.h>
 #include <netconf/agent.h>
+#include <netconf/translator_network_ranges.h>
 
 namespace isc {
 namespace netconf {
 
+void NetconfAgent::init(const std::string& config) {
+    // do somthing with the config file.
+}
+
 bool NetconfAgent::run() {
 
     // Now define all translators. Each will register specific callback.
-    translators_.push_back(new TranslatorNetworkRanges());
+    //translators_.push_back(new TranslatorNetworkRanges());
 
     // Those will be implemented next.
     // translators_.push_back(new TranslatorOptionSets());
@@ -30,11 +36,10 @@ bool NetconfAgent::run() {
         return (false);
     }
 
-
     while (!shutdown_) {
         try {
             run_one();
-            io_service_->poll();
+            io_service_.poll();
         } catch (const std::exception& e) {
             // General catch-all exception that are not caught by more specific
             // catches. This one is for exceptions derived from std::exception.

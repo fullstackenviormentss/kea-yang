@@ -18,11 +18,16 @@ namespace netconf {
     class NetconfAgent : public isc::dhcp::Daemon {
  public:
     NetconfAgent()
+        :shutdown_(false)
     {
 
     };
 
+    void init(const std::string& config);
+    
     bool run();
+
+    void run_one();
     
 private:
 
@@ -34,6 +39,8 @@ private:
     isc::asiolink::IOService io_service_;
 
     std::vector <TranslatorPtr> translators_;
+
+    bool shutdown_;
 
 };
 
