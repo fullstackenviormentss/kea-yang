@@ -1,123 +1,126 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+
   <server xmlns="urn:ietf:params:xml:ns:yang:ietf-dhcpv6-server">
     <server-config>
       <serv-attributes>
-        <duid>
-          <type-code>65535</type-code>
-          <duid-llt-hardware-type>1</duid-llt-hardware-type>
-          <duid-llt-time>512640186</duid-llt-time>
-          <duid-llt-link-layer-addr>56847afe6699</duid-llt-link-layer-addr>
-        </duid>
-        <name />
-        <description />
-        <ipv6-address />
-        <interfaces-config />
-        <vendor-info>
-          <ent-num />
-          <data />
-        </vendor-info>
+	<duid>
+	  <type-code>65535</type-code>
+	  <duid-llt-hardware-type>1</duid-llt-hardware-type>
+	  <duid-llt-time>512640186</duid-llt-time>
+	  <duid-llt-link-layer-addr>56:84:7a:fe:66:99</duid-llt-link-layer-addr>
+	</duid>
+	<name />
+	<description />
+	<ipv6-address>2001:db8::1</ipv6-address>
+	<!-- <interfaces-config /> -->
+	<vendor-info>
+	  <ent-num>1234</ent-num>
+	  <data>netconf sucks</data>
+	</vendor-info>
+
       </serv-attributes>
       <option-sets>
-        <option-set>
-            <option-set-id>1</option-set-id>
-          <sip-server-domain-name-list-option>
-            <sip-serv-domain-name>sip1.example.net</sip-serv-domain-name>
-          </sip-server-domain-name-list-option>
-          <dns-servers-option>
-            <dns-server>
-              <dns-serv-id>1</dns-serv-id>
-                <dns-serv-addr>2001:db8::71</dns-serv-addr>
-              <dns-serv-id>2</dns-serv-id>
-                <dns-serv-addr>2001:db8::72</dns-serv-addr>
-            </dns-server>
-          </dns-servers-option>
-          <sntp-server-option>
-            <sntp-server>
-              <sntp-serv-id>1</sntp-serv-id>
-                <sntp-serv-addr>2001:db8::21</sntp-serv-addr>
-              <sntp-serv-id>2</sntp-serv-id>
-                <sntp-serv-addr>2001:db8::22</sntp-serv-addr>
-            </sntp-server>
-          </sntp-server-option>
-          <aftr-name-option>
-            <tunnel-endpoint-name>aftr.example.net</tunnel-endpoint-name>
-          </aftr-name-option>
-        </option-set>
-        <option-set>
-          <option-set-id>2</option-set-id>
-          <s46-br-option>
-            <br>
-              <br-id>1</br-id>
-              <br-ipv6-addr>2001:db8::4000</br-ipv6-addr>
-            </br>
-          </s46-br-option>
-          <s46-v4-v6-binding-option>
-            <ce>
-              <ce-id>1</ce-id>
-              <ipv4-addr>198.51.100.1</ipv4-addr>
-              <bind-prefix6-len>64</bind-prefix6-len>
-              <bind-ipv6-prefix>2001:db8:20:bff::</bind-ipv6-prefix>
-              <port-parameter>
-                <offset>0</offset>
-                <psid-len>0</psid-len>
-                <psid>0</psid>
-              </port-parameter>
-            </ce>
-          </s46-v4-v6-binding-option>
-        </option-set>
+	<option-set>
+	    <option-set-id>1</option-set-id>
+
+<!--
+	    <sip-server-domain-name-list-option>
+	      <sip-serv-domain-name>sip1.example.net</sip-serv-domain-name>
+	    </sip-server-domain-name-list-option>
+
+	    <dns-servers-option>
+	      <dns-server>
+		<dns-serv-id>1</dns-serv-id>
+		<dns-serv-addr>2001:db8::71</dns-serv-addr>
+		<dns-serv-id>2</dns-serv-id>
+		<dns-serv-addr>2001:db8::72</dns-serv-addr>
+	      </dns-server>
+	    </dns-servers-option>
+
+
+	  <sntp-server-option>
+	    <sntp-server>
+	      <sntp-serv-id>1</sntp-serv-id>
+		<sntp-serv-addr>2001:db8::21</sntp-serv-addr>
+	      <sntp-serv-id>2</sntp-serv-id>
+		<sntp-serv-addr>2001:db8::22</sntp-serv-addr>
+	    </sntp-server>
+	  </sntp-server-option>
+	  <aftr-name-option>
+	    <tunnel-endpoint-name>aftr.example.net</tunnel-endpoint-name>
+	  </aftr-name-option> -->
+	</option-set>
+	<option-set>
+	  <option-set-id>2</option-set-id> <!--
+	  <s46-br-option>
+	    <br>
+	      <br-id>1</br-id>
+	      <br-ipv6-addr>2001:db8::4000</br-ipv6-addr>
+	    </br>
+	  </s46-br-option>
+	  <s46-v4-v6-binding-option>
+	    <ce>
+	      <ce-id>1</ce-id>
+	      <ipv4-addr>198.51.100.1</ipv4-addr>
+	      <bind-prefix6-len>64</bind-prefix6-len>
+	      <bind-ipv6-prefix>2001:db8:20:bff::</bind-ipv6-prefix>
+	      <port-parameter>
+		<offset>0</offset>
+		<psid-len>0</psid-len>
+		<psid>0</psid>
+	      </port-parameter>
+	    </ce>
+	    </s46-v4-v6-binding-option> -->
+
+	</option-set>
       </option-sets>
       <network-ranges>
-        <option-set-id>1</option-set-id>
-        <network-range>
-          <network-range-id>1</network-range-id>
-          <network-description />
-          <network-prefix>2001:db8:20:0b::/56</network-prefix>
-          <option-set-id>2</option-set-id>
-          <pd-pools>
-            <pd-pool>
-              <pool-id>1</pool-id>
-              <prefix>2001:db8:20:b00::</prefix>
-              <prefix-length>57</prefix-length>
-              <valid-lifetime>150</valid-lifetime>
-              <renew-time>20</renew-time>
-              <rebind-time>90</rebind-time>
-              <preferred-lifetime>120</preferred-lifetime>
-              <option-set-id />
-            </pd-pool>
-            <pd-pool>
-              <pool-id>2</pool-id>
-              <prefix>2001:db8:20:b80::</prefix>
-              <prefix-length>58</prefix-length>
-              <valid-lifetime>150</valid-lifetime>
-              <renew-time>20</renew-time>
-              <rebind-time>90</rebind-time>
-              <preferred-lifetime>120</preferred-lifetime>
-              <option-set-id />
-            </pd-pool>
-            <pd-pool>
-              <pool-id>3</pool-id>
-              <prefix>2001:db8:20:bc0::</prefix>
-              <prefix-length>59</prefix-length>
-              <valid-lifetime>150</valid-lifetime>
-              <renew-time>20</renew-time>
-              <rebind-time>90</rebind-time>
-              <preferred-lifetime>120</preferred-lifetime>
-              <option-set-id />
-            </pd-pool>
-            <pd-pool>
-              <pool-id>4</pool-id>
-              <prefix>2001:db8:20:be0::</prefix>
-              <prefix-length>60</prefix-length>
-              <valid-lifetime>150</valid-lifetime>
-              <renew-time>20</renew-time>
-              <rebind-time>90</rebind-time>
-              <preferred-lifetime>120</preferred-lifetime>
-              <option-set-id />
-            </pd-pool>
-          </pd-pools>
-        </network-range>
+	<option-set-id>1</option-set-id>
+	<network-range>
+	  <network-range-id>1</network-range-id>
+	  <network-description />
+	  <network-prefix>2001:db8:20:0b::/56</network-prefix>
+	  <option-set-id>2</option-set-id>
+	  <pd-pools>
+	    <pd-pool>
+	      <pool-id>1</pool-id>
+	      <prefix>2001:db8:20:b00::/57</prefix>
+	      <prefix-length>57</prefix-length>
+	      <valid-lifetime>150</valid-lifetime>
+	      <renew-time>20</renew-time>
+	      <rebind-time>90</rebind-time>
+	      <preferred-lifetime>120</preferred-lifetime>
+	      <rapid-commit>true</rapid-commit>
+	    </pd-pool>
+	    <pd-pool>
+	      <pool-id>2</pool-id>
+	      <prefix>2001:db8:20:b80::/58</prefix>
+	      <prefix-length>58</prefix-length>
+	      <valid-lifetime>150</valid-lifetime>
+	      <renew-time>20</renew-time>
+	      <rebind-time>90</rebind-time>
+	      <preferred-lifetime>120</preferred-lifetime>
+	    </pd-pool>
+	    <pd-pool>
+	      <pool-id>3</pool-id>
+	      <prefix>2001:db8:20:bc0::/59</prefix>
+	      <prefix-length>59</prefix-length>
+	      <valid-lifetime>150</valid-lifetime>
+	      <renew-time>20</renew-time>
+	      <rebind-time>90</rebind-time>
+	      <preferred-lifetime>120</preferred-lifetime>
+	    </pd-pool>
+	    <pd-pool>
+	      <pool-id>4</pool-id>
+	      <prefix>2001:db8:20:be0::/60</prefix>
+	      <prefix-length>60</prefix-length>
+	      <valid-lifetime>150</valid-lifetime>
+	      <renew-time>20</renew-time>
+	      <rebind-time>90</rebind-time>
+	      <preferred-lifetime>120</preferred-lifetime>
+	    </pd-pool>
+	  </pd-pools>
+	</network-range>
       </network-ranges>
     </server-config>
   </server>
-</config>
