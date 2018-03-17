@@ -17,11 +17,7 @@ namespace netconf {
 
     class NetconfAgent : public isc::dhcp::Daemon {
  public:
-    NetconfAgent()
-        :shutdown_(false)
-    {
-
-    };
+      NetconfAgent();
 
     void init(const std::string& config);
     
@@ -40,7 +36,12 @@ private:
 
     std::vector <TranslatorPtr> translators_;
 
-    bool shutdown_;
+    std::string config_;
+
+    // name of the mode (usually ietf-dhcpv6-server)
+    std::string model_;
+
+    //    bool shutdown_;
 
 };
 

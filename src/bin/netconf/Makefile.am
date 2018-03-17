@@ -3,7 +3,7 @@ SUBDIRS = . tests
 
 SYSREPO_SRC=/home/thomson/devel/sysrepo
 
-NETCONF_INCLUDES=$(SYSREPO_SRC)/inc
+NETCONF_INCLUDES=-I$(SYSREPO_SRC)/inc -I$(SYSREPO_SRC)
 NETCONF_LIBS=-L$(SYSREPO_SRC)/build/src -L$(SYSREPO_SRC)/build/swig -lsysrepo -lSysrepo-cpp
 
 AM_CPPFLAGS = -I$(top_srcdir)/src/lib -I$(top_builddir)/src/lib
