@@ -1,0 +1,137 @@
+{
+  "Dhcp6": {
+    "server-id": {
+      "htype": 1,
+      "identifier": "56847afe6699",
+      "time": 512640186,
+      "type": "LLT"
+    },
+    "control-socket": {
+      "socket-type": "unix",
+      "socket-name": "/tmp/kea-dhcp6-ctrl.sock"
+    },
+    "lease-database": {
+      "contact-points": "192.168.128.17,192.168.128.18,192.168.128.19,192.168.128.20,2001:db8::3000,2001:db8::3001",
+      "keyspace": "kea_shard",
+      "password": "kea",
+      "type": "cql",
+      "reconnect-wait-time": 5000,
+      "connect-timeout": 5000,
+      "request-timeout": 5000,
+      "user": "kea"
+    },
+    "expired-leases-processing": {
+      "flush-reclaimed-timer-wait-time": 25,
+      "hold-reclaimed-time": 3600,
+      "max-reclaim-leases": 20,
+      "max-reclaim-time": 50,
+      "reclaim-timer-wait-time": 10,
+      "unwarned-reclaim-cycles": 5
+    },
+    "option-data": [
+      {
+        "code": 88,
+        "csv-format": true,
+        "data": "2001:db8::101,2001:db8::201",
+        "name": "dhcp4o6-server-addr",
+        "space": "dhcp6"
+      },
+      {
+        "code": 111,
+        "csv-format": true,
+        "data": "88, 96, 64",
+        "name": "s46-priority",
+        "space": "dhcp6"
+      },
+      {
+        "code": 64,
+        "csv-format": true,
+        "data": "aftr.example.net",
+        "name": "aftr-name",
+        "space": "dhcp6"
+      },
+      {
+        "code": 31,
+        "csv-format": true,
+        "data": "2001:db8::21,2001:db8::22",
+        "name": "sntp-servers",
+        "space": "dhcp6"
+      },
+      {
+        "code": 21,
+        "csv-format": true,
+        "data": "sip1.example.net,sip2.example.net",
+        "name": "sip-server-dns",
+        "space": "dhcp6"
+      },
+      {
+        "code": 23,
+        "csv-format": true,
+        "data": "2001:db8::71,2001:db8::72",
+        "name": "dns-servers",
+        "space": "dhcp6"
+      }
+    ],
+    "preferred-lifetime": 120,
+    "valid-lifetime": 150,
+    "renew-timer": 20,
+    "rebind-timer": 90,
+    "privacy-history-size": 5,
+    "privacy-valid-lifetime": 10,
+    "subnet6": [
+      {
+        "option-data": [
+            {
+                "code": 90, 
+                "csv-format": true, 
+                "data": "2001:db8::4000", 
+                "name": "s46-br", 
+                "space": "4over6-lw"
+            }, 
+            {
+                "code": 92, 
+                "csv-format": true, 
+                "data": "198.51.100.1,2001:db8:20:bff::/64", 
+                "name": "s46-v4v6bind", 
+                "space": "4over6-lw"
+            }, 
+            {
+                "code": 93, 
+                "csv-format": true, 
+                "data": "0,0/0", 
+                "name": "s46-portparams", 
+                "space": "v4v6bind"
+            }, 
+            {
+                "code": 96, 
+                "name": "s46-cont-lw", 
+                "space": "dhcp6"
+            }
+        ], 
+        "pd-pools": [
+            {
+                "delegated-len": 60, 
+                "prefix": "2001:db8:20:b00::", 
+                "prefix-len": 57
+            }, 
+            {
+                "delegated-len": 60, 
+                "prefix": "2001:db8:20:b80::", 
+                "prefix-len": 58
+            }, 
+            {
+                "delegated-len": 60, 
+                "prefix": "2001:db8:20:bc0::", 
+                "prefix-len": 59
+            }, 
+            {
+                "delegated-len": 60, 
+                "prefix": "2001:db8:20:be0::", 
+                "prefix-len": 60
+            }
+        ], 
+        "subnet": "2001:db8:20:b00::/56"
+      } 
+    ]
+  }
+}
