@@ -10,6 +10,7 @@
 #include <dhcpsrv/daemon.h>
 #include <asiolink/asio_wrapper.h>
 #include <asiolink/asiolink.h>
+#include <netconf/translator.h>
 
 namespace isc {
 namespace netconf {
@@ -17,16 +18,11 @@ namespace netconf {
     class NetconfAgent : public isc::dhcp::Daemon {
  public:
     NetconfAgent()
-        :verbose_(false) {
+    {
 
     };
 
     bool run();
-
-    void setVerbose(bool verbose) {
-        verbose_ = verbose;
-    }
-
     
 private:
 
@@ -36,6 +32,8 @@ private:
 
     /// @brief IOService object, used for all ASIO operations.
     isc::asiolink::IOService io_service_;
+
+    std::vector <TranslatorPtr> translators_;
 
 };
 

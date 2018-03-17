@@ -7,12 +7,18 @@
 #include <config.h>
 #include <netconf/agent.h>
 
-
-
 namespace isc {
 namespace netconf {
 
 bool NetconfAgent::run() {
+
+    // Now define all translators. Each will register specific callback.
+    translators_.push_back(new TranslatorNetworkRanges());
+
+    // Those will be implemented next.
+    // translators_.push_back(new TranslatorOptionSets());
+    // translators_.push_back(new TranslatorDuid());
+    // translators_.push_back(new TranslatorInterfaces());
 
     // We need to establish connection to the sysrepo first.
     if (!connectSysrepo()) {
@@ -23,6 +29,7 @@ bool NetconfAgent::run() {
     if (!connectControlSocket()) {
         return (false);
     }
+
 
     while (!shutdown_) {
         try {

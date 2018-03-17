@@ -6,38 +6,43 @@
 
 #include <config.h>
 
+#include <dhcpsrv/cfgmgr.h>
 #include <netconf/agent.h>
+#include <netconf/netconf_log.h>
+#include <iostream>
 
-int main(
+using namespace std;
+using namespace isc::netconf;
+using namespace isc::dhcp;
 
-         /// @brief Prints Kea Usage and exits
+/// @brief Prints Kea Usage and exits
 ///
 /// Note: This function never returns. It terminates the process.
 void
 usage() {
     cerr << "Kea netconf daemon, version " << VERSION << endl;
     cerr << endl;
-    cerr << "Usage: " <<
+    cerr << "Usage: "
          << "  -c: config-file" << endl;
     cerr << "  -v: print version number and exit" << endl;
     cerr << "  -V: print extended version and exit" << endl;
     exit(EXIT_FAILURE);
 }
-} // end of anonymous namespace
 
 int
 main(int argc, char* argv[]) {
     // The standard config file
     std::string config_file("");
+    int ch;
 
     while ((ch = getopt(argc, argv, "vVc:")) != -1) {
         switch (ch) {
         case 'v':
-            cout << Dhcpv4Srv::getVersion(false) << endl;
+            cout << NetconfAgent::getVersion(false) << endl;
             return (EXIT_SUCCESS);
 
         case 'V':
-            cout << Dhcpv4Srv::getVersion(true) << endl;
+            cout << NetconfAgent::getVersion(true) << endl;
             return (EXIT_SUCCESS);
 
         case 'c': // config file
@@ -66,11 +71,11 @@ main(int argc, char* argv[]) {
         // It is important that we set a default logger name because this name
         // will be used when the user doesn't provide the logging configuration
         // in the Kea configuration file.
-        CfgMgr::instance().setDefaultLoggerName(KEA_NETCONF_LOGGER_NAME);
+        CfgMgr::instance().setDefaultLoggerName(NETCONF_ROOT_LOGGER_NAME);
 
         // Initialize logging.  If verbose, we'll use maximum verbosity.
         bool verbose_mode = true;
-        Daemon::loggerInit(KEA_NETCONF_LOGGER_NAME, verbose_mode);
+        Daemon::loggerInit(NETCONF_ROOT_LOGGER_NAME, verbose_mode);
         LOG_INFO(netconf_logger, NETCONF_AGENT_STARTING).arg(VERSION).arg(getpid());
 
         // Create the server instance.
@@ -86,7 +91,7 @@ main(int argc, char* argv[]) {
 
         try {
             // Initialize the server.
-            server.init(config_file);
+            agent.init(config_file);
         } catch (const std::exception& ex) {
             cerr << "Failed to initialize server: " << ex.what() << endl;
             return (EXIT_FAILURE);
