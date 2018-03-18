@@ -9,7 +9,9 @@
 
 #include <exceptions/exceptions.h>
 
+extern "C" {
 #include <sysrepo.h>
+}
 
 namespace isc {
 namespace netconf {

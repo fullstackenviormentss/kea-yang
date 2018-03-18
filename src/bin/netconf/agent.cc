@@ -9,7 +9,7 @@
 #include <netconf/agent.h>
 #include <netconf/translator_network_ranges.h>
 
-#include <swig/cpp/src/Session.h>
+#include <sysrepo-cpp/Session.h>
 
 #include <iostream>
 

@@ -21,6 +21,7 @@ NetconfConnection::~NetconfConnection() {
     }
 }
 
+void
 NetconfConnection::connect() {
     int rc = SR_ERR_OK;
 

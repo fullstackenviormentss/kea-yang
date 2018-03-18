@@ -6,6 +6,8 @@ AM_CPPFLAGS += -I$(top_srcdir)/src/bin -I$(top_builddir)/src/bin
 AM_CPPFLAGS += -I$(top_srcdir)/src -I$(top_builddir)/src
 AM_CPPFLAGS += $(BOOST_INCLUDES) $(SYSREPO_INCLUDES)
 
+EXTRA_LIBS = -lSysrepo-cpp
+
 AM_CXXFLAGS = $(KEA_CXXFLAGS)
 
 if USE_STATIC_LINK
@@ -48,6 +50,7 @@ noinst_LTLIBRARIES = libnetconf.la
 
 libnetconf_la_SOURCES  = agent.cc agent.h
 libnetconf_la_SOURCES += translator.cc translator.h
+libnetconf_la_SOURCES += netconf_connection.cc netconf_connection.h
 libnetconf_la_SOURCES += netconf_log.cc netconf_log.h
 
 nodist_libnetconf_la_SOURCES = netconf_messages.h netconf_messages.cc
@@ -75,8 +78,7 @@ kea_netconf_LDADD += $(top_builddir)/src/lib/log/libkea-log.la
 kea_netconf_LDADD += $(top_builddir)/src/lib/util/threads/libkea-threads.la
 kea_netconf_LDADD += $(top_builddir)/src/lib/util/libkea-util.la
 kea_netconf_LDADD += $(top_builddir)/src/lib/exceptions/libkea-exceptions.la
-kea_netconf_LDADD += $(LOG4CPLUS_LIBS) $(CRYPTO_LIBS) $(BOOST_LIBS) $(SYSREPO_LIBS)
-
+kea_netconf_LDADD += $(LOG4CPLUS_LIBS) $(CRYPTO_LIBS) $(BOOST_LIBS) $(EXTRA_LIBS) $(SYSREPO_LIBS)
 
 kea_netconfdir = $(pkgdatadir)
 
