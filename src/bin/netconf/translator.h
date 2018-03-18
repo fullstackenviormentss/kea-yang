@@ -9,9 +9,11 @@
 
 #include <config.h>
 
-#include <cc/data.h>
 #include <boost/shared_ptr.hpp>
+#include <cc/data.h>
 #include <netconf_connection.h>
+// TODO: move UnixControlClient to a path outside testutils.
+#include <src/lib/testutils/unix_control_client.h>
 
 namespace isc {
 namespace netconf {
@@ -22,9 +24,9 @@ namespace netconf {
 /// from sysrepo (in YANG format) and converts it to appropriate
 /// JSON that can be sent over control channel and understood by Kea
 class Translator {
- public:
+public:
     // Constructor (requires xpath to install a callback)
-    Translator(NetconfConnection& connection, const std::string& xpath);
+    Translator(NetconfConnection &connection, const std::string &xpath);
 
     virtual ~Translator();
 
@@ -32,7 +34,7 @@ class Translator {
 
     // This method will be called when the callback returns.
     // Need to figure out the type used.
-    void setYangData(void* data);
+    void setYangData(void *data);
 
     // This method translates Netconf data to JSON format
     // understood by Kea.
@@ -41,21 +43,21 @@ class Translator {
     // Once setYangData is called,
     isc::data::ElementPtr getJSON();
 
- protected:
-
+protected:
     std::string xpath_;
 
-    void * netconf_data_;
+    void *netconf_data_;
 
     isc::data::ElementPtr json_;
 
-    NetconfConnection& connection_;
+    NetconfConnection &connection_;
+
+    isc::dhcp::test::UnixControlClient keaCtrlChannel_;
 };
 
 typedef boost::shared_ptr<Translator> TranslatorPtr;
 
-};
-};
+}  // namespace netconf
+}  // namespace isc
 
 #endif /* TRANSLATOR_H */
-

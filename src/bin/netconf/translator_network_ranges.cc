@@ -11,18 +11,20 @@ namespace isc {
 namespace netconf {
 
 TranslatorNetworkRanges::TranslatorNetworkRanges(NetconfConneciton& connection,
-        const std::string& xpath)
+                                                 const std::string& xpath)
     : Translator(connection, xpath) {
-    int rc = sr_module_change_subscribe(session,
-            "ietf-dhcpv6-server:server/server-config/network-ranges/network-range",
-            TranslatorNetworkRanges::configChaged, NULL, 0,
-            SR_SUBSCR_EV_ENABLED | SR_SUBSCR_APPLY_ONLY, &subscription);
+    int rc = sr_module_change_subscribe(
+        session,
+        "ietf-dhcpv6-server:server/server-config/network-ranges/network-range",
+        TranslatorNetworkRanges::configChaged, NULL, 0,
+        SR_SUBSCR_EV_ENABLED | SR_SUBSCR_APPLY_ONLY, &subscription);
 }
 
 TranslatorNetworkRanges::~TranslatorNetworkRanges() {
 }
 
-void TranslatorNetworkRanges::translate() {
+void
+TranslatorNetworkRanges::translate() {
     // Get the Netconf data from netconf_data_
     // and convert it to a command that is understandable by kea
     //
@@ -31,7 +33,9 @@ void TranslatorNetworkRanges::translate() {
     // - subnet6-get() - check if the subnet already exists
     // - if it does, call subnet6-del()
     // - call subnet6-add() with new information
+    // TODO: replace placeholder.
+    keaCtrlChannel_.sendCommand("{ \"command\": \"subnet6-add\" }")
 }
 
-};
-};
+}  // namespace netconf
+}  // namespace isc
