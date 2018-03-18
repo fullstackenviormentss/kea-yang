@@ -6,9 +6,9 @@
 
 #include <config.h>
 
-#include <dhcpsrv/cfgmgr.h>
 #include <netconf/agent.h>
 #include <netconf/netconf_log.h>
+#include <dhcpsrv/cfgmgr.h>
 #include <exceptions/exceptions.h>
 #include <iostream>
 
