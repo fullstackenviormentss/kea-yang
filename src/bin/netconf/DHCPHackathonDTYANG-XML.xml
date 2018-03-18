@@ -15,7 +15,7 @@
 	<!-- <interfaces-config /> -->
 	<vendor-info>
 	  <ent-num>1234</ent-num>
-	  <data>netconf sucks</data>
+	  <data>why is vendor-info mandatory?</data>
 	</vendor-info>
 
       </serv-attributes>
@@ -23,7 +23,6 @@
 	<option-set>
 	    <option-set-id>1</option-set-id>
 
-<!--
 	    <sip-server-domain-name-list-option>
 	      <sip-serv-domain-name>sip1.example.net</sip-serv-domain-name>
 	    </sip-server-domain-name-list-option>
@@ -32,26 +31,37 @@
 	      <dns-server>
 		<dns-serv-id>1</dns-serv-id>
 		<dns-serv-addr>2001:db8::71</dns-serv-addr>
+	      </dns-server>
+	      <dns-server>
 		<dns-serv-id>2</dns-serv-id>
 		<dns-serv-addr>2001:db8::72</dns-serv-addr>
 	      </dns-server>
 	    </dns-servers-option>
 
-
 	  <sntp-server-option>
 	    <sntp-server>
 	      <sntp-serv-id>1</sntp-serv-id>
-		<sntp-serv-addr>2001:db8::21</sntp-serv-addr>
+	      <sntp-serv-addr>2001:db8::21</sntp-serv-addr>
+	    </sntp-server>
+	    <sntp-server>
 	      <sntp-serv-id>2</sntp-serv-id>
 		<sntp-serv-addr>2001:db8::22</sntp-serv-addr>
 	    </sntp-server>
 	  </sntp-server-option>
 	  <aftr-name-option>
 	    <tunnel-endpoint-name>aftr.example.net</tunnel-endpoint-name>
-	  </aftr-name-option> -->
+	  </aftr-name-option>
 	</option-set>
 	<option-set>
-	  <option-set-id>2</option-set-id> <!--
+	  <option-set-id>2</option-set-id>
+
+	  <!-- for some reason sysrepoctl refuses to load the configuration
+	       id sip-server-domain-name-list-option is not specified -->
+	    <sip-server-domain-name-list-option>
+	      <sip-serv-domain-name>sip1.example.net</sip-serv-domain-name>
+	    </sip-server-domain-name-list-option>
+
+
 	  <s46-br-option>
 	    <br>
 	      <br-id>1</br-id>
@@ -70,7 +80,7 @@
 		<psid>0</psid>
 	      </port-parameter>
 	    </ce>
-	    </s46-v4-v6-binding-option> -->
+	    </s46-v4-v6-binding-option>
 
 	</option-set>
       </option-sets>

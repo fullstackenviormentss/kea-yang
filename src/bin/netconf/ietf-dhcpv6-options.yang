@@ -234,8 +234,8 @@ module ietf-dhcpv6-options {
     }
 
     container sip-server-domain-name-list-option {
-      if-feature sip-server-domain-name-list-op;
-      presence "Enable this option";
+      // if-feature sip-server-domain-name-list-op;
+      // presence "Enable this option";
       description "OPTION_SIP_SERVER_D (21) SIP Servers Domain Name List";
       reference "RFC3319: Dynamic Host Configuration Protocol
         (DHCPv6) Options for Session Initiation Protocol (SIP) Servers";
@@ -247,8 +247,8 @@ module ietf-dhcpv6-options {
     }
 
     container sip-server-address-list-option {
-      if-feature sip-server-address-list-op;
-      presence "Enable this option";
+      // if-feature sip-server-address-list-op;
+      // presence "Enable this option";
       description "OPTION_SIP_SERVER_A (22) SIP Servers IPv6 Address List";
       reference "RFC3319: Dynamic Host Configuration Protocol (DHCPv6)
         Options for Session Initiation Protocol (SIP) Servers";
@@ -269,8 +269,8 @@ module ietf-dhcpv6-options {
     }
 
     container dns-servers-option {
-      if-feature dns-servers-op;
-      presence "Enable this option";
+      // if-feature dns-servers-op;
+      // presence "Enable this option";
       description "OPTION_DNS_SERVERS (23) DNS recursive Name Server option";
       reference "RFC3646: DNS Configuration options for Dynamic Host Configuration
         Protocol for IPv6 (DHCPv6)";
@@ -291,8 +291,8 @@ module ietf-dhcpv6-options {
     }
 
     container domain-searchlist-option {
-      if-feature domain-searchlist-op;
-      presence "Enable this option";
+      // if-feature domain-searchlist-op;
+      // presence "Enable this option";
       description "OPTION_DOMAIN_LIST (24) Domain Search List Option";
       reference "RFC3646: DNS Configuration options for Dynamic
         Host Configuration Protocol for IPv6 (DHCPv6)";
@@ -313,8 +313,8 @@ module ietf-dhcpv6-options {
     }
 
     container nis-config-option {
-      if-feature nis-config-op;
-      presence "Enable this option";
+      // if-feature nis-config-op;
+      // presence "Enable this option";
       description "OPTION_NIS_SERVERS (27) Network Information Service (NIS)
         Servers Option.";
       reference "RFC3898: Network Information Service (NIS) Configuration
@@ -336,8 +336,8 @@ module ietf-dhcpv6-options {
     }
 
     container nis-plus-config-option {
-      if-feature nis-plus-config-op;
-      presence "Enable this option";
+      // if-feature nis-plus-config-op;
+      // presence "Enable this option";
       description "OPTION_NISP_SERVERS (28): Network Information Service V2
         (NIS+) Servers Option.";
       reference "RFC3989: Network Information Service (NIS) Configuration
@@ -391,7 +391,7 @@ module ietf-dhcpv6-options {
 
 
     container sntp-server-option {
-      if-feature sntp-server-op;
+      // if-feature sntp-server-op;
       presence "Enable this option";
       description "OPTION_SNTP_SERVERS (31) Simple Network Time Protocol
         (SNTP) Servers Option";
@@ -414,7 +414,7 @@ module ietf-dhcpv6-options {
     }
 
     container info-refresh-time-option {
-      if-feature info-refresh-time-op;
+    //if-feature info-refresh-time-op;
       presence "Enable this option";
       description "OPTION_INFORMATION_REFRESH_TIME (32) Information Refresh
         Time option.";
@@ -428,7 +428,7 @@ module ietf-dhcpv6-options {
     }
 
     container client-fqdn-option {
-      if-feature client-fqdn-op;
+    //if-feature client-fqdn-op;
       presence "Enable this option";
       description "OPTION_CLIENT_FQDN (39) DHCPv6 Client FQDN Option";
       reference "RFC4704: The Dynamic Host Configuration Protocol for IPv6
@@ -451,7 +451,7 @@ module ietf-dhcpv6-options {
     }
 
     container posix-timezone-option {
-      if-feature posix-timezone-op;
+    //if-feature posix-timezone-op;
       presence "Enable this option";
       description "OPTION_NEW_POSIX_TIMEZONE (41) Posix Timezone option";
       reference "RFC4833: Timezone Options for DHCP";
@@ -463,7 +463,7 @@ module ietf-dhcpv6-options {
     }
 
     container tzdb-timezone-option {
-      if-feature tzdb-timezone-op;
+    //if-feature tzdb-timezone-op;
       presence "Enable this option";
       description "OPTION_NEW_TZDB_TIMEZONE (42) Timezone Database option";
       reference "RFC4822: Timezone Options for DHCP";
@@ -480,7 +480,7 @@ module ietf-dhcpv6-options {
 
       // Zihao - Re-modelled so it only contains one time source suboption
 
-      if-feature ntp-server-op;
+    //if-feature ntp-server-op;
       presence "Enable this option";
       description "OPTION_NTP_SERVER (56) NTP Server Option for DHCPv6";
       reference "RFC5908: Network Time Protocol (NTP) Server Option for
@@ -518,7 +518,7 @@ module ietf-dhcpv6-options {
     }
 
     container boot-file-url-option {
-      if-feature boot-file-url-op;
+    //if-feature boot-file-url-op;
       presence "Enable this option";
       description "OPT_BOOTFILE_URL (59) Boot File URL option";
       reference "RFC5970: DHCPv6 Options for Network Boot";
@@ -547,7 +547,7 @@ module ietf-dhcpv6-options {
     }
 
     container boot-file-param-option {
-      if-feature boot-file-param-op;
+    //if-feature boot-file-param-op;
       presence "Enable this option";
       description "OPT_BOOTFiLE_PARAM (60) Boot File Parameters Option";
       reference "RFC5970: DHCPv6 Options for Network Boot";
@@ -568,7 +568,7 @@ module ietf-dhcpv6-options {
     }
 
     container aftr-name-option {
-      if-feature aftr-name-op;
+    //if-feature aftr-name-op;
       presence "Enable this option";
       description "OPTION_AFTR_NAME (64) AFTR-Name DHCPv6 Option";
       reference "RFC6334: Dynamic Host Configuration Protocol for IPv6
@@ -581,7 +581,7 @@ module ietf-dhcpv6-options {
     }
 
     container kbr-default-name-option {
-      if-feature kbr-default-name-op;
+    //if-feature kbr-default-name-op;
       presence "Enable this option";
       description "OPTION_KRB_DEFAULT_REALM_NAME (77) Kerberos Default Realm Name Option";
       reference "RFC6784: Kerberos Options for DHCPv6";
@@ -593,7 +593,7 @@ module ietf-dhcpv6-options {
     }
 
     container kbr-kdc-option {
-      if-feature kbr-kdc-op;
+    //if-feature kbr-kdc-op;
       presence "Enable this option";
       description "OPTION_KRB_KDC (78) Kerberos KDB Option";
       reference "RFC6784: Kerberos Options for DHCPv6";
@@ -639,7 +639,7 @@ module ietf-dhcpv6-options {
     }
 
     container sol-max-rt-option {
-      if-feature sol-max-rt-op;
+    //if-feature sol-max-rt-op;
       presence "Enable this option";
       description "OPTION_SOL_MAX_RT (82) sol max rt option";
       reference "RFC7083: Modification to Default Values of
@@ -652,7 +652,7 @@ module ietf-dhcpv6-options {
     }
 
     container inf-max-rt-option {
-      if-feature inf-max-rt-op;
+    //if-feature inf-max-rt-op;
       presence "Enable this option";
       description "OPTION_INF_MAX_RT (83) inf max rt option";
       reference "RFC7083: Modification to Default Values of
@@ -665,7 +665,7 @@ module ietf-dhcpv6-options {
     }
 
     container addr-selection-option {
-      if-feature addr-selection-op;
+    //if-feature addr-selection-op;
       presence "Enable this option";
       description "OPTION_ADDRSEL (84) and OPTION_ADDRSEL_TABLE (85)";
       reference "RFC7078: Distributing Address Selection Policy Using
@@ -715,7 +715,7 @@ module ietf-dhcpv6-options {
     }
 
     container pcp-server-option {
-      if-feature pcp-server-op;
+    //if-feature pcp-server-op;
       presence "Enable this option";
       description "OPTION_V6_PCP_SERVER (86) pcp server option";
       reference "RFC7291: DHCP Options for the Port Control
@@ -737,7 +737,7 @@ module ietf-dhcpv6-options {
     }
 
     container s46-rule-option {
-      if-feature s46-rule-op;
+    //if-feature s46-rule-op;
       presence "Enable this option";
       description "OPTION_S46_RULE (89) S46 rule option";
       reference "RFC7598: DHCPv6 Options for Configuration of
@@ -787,7 +787,7 @@ module ietf-dhcpv6-options {
     }
 
     container s46-br-option {
-      if-feature s46-br-op;
+    //if-feature s46-br-op;
       presence "Enable this option";
       description "OPTION_S46_BR (90) S46 BR Option";
       reference "RFC7598: DHCPv6 Options for Configuration of
@@ -809,7 +809,7 @@ module ietf-dhcpv6-options {
     }
 
     container s46-dmr-option {
-      if-feature s46-dmr-op;
+    //if-feature s46-dmr-op;
       presence "Enable this option";
       description "OPTION_S46_DMR (91) S46 DMR Option";
       reference "RFC7598: DHCPv6 Options for Configuration of
@@ -836,7 +836,7 @@ module ietf-dhcpv6-options {
     }
 
     container s46-v4-v6-binding-option {
-      if-feature s46-v4-v6-binding-op;
+    //if-feature s46-v4-v6-binding-op;
       presence "Enable this option";
       description "OPTION_S46_V4V6BIND (92) S46 IPv4/IPv6 Address
         Binding option";
@@ -858,11 +858,10 @@ module ietf-dhcpv6-options {
         leaf bind-prefix6-len {
           type uint8;
           mandatory true;
-          description "bind ipv6 prefix
-            length";
+          description "bind ipv6 prefix length";
         }
         leaf bind-ipv6-prefix {
-          type inet:ipv6-prefix;
+          type inet:ipv6-address;
           mandatory true;
           description "bind ipv6 prefix";
         }
@@ -879,7 +878,7 @@ module ietf-dhcpv6-options {
     description "OPTION_RSOO (66) Relay-Supplied Options option";
     reference "RFC6422: Relay-Supplied DHCP Options";
     container erp-local-domain-name-option {
-      if-feature erp-local-domain-name-op;
+    //if-feature erp-local-domain-name-op;
       presence "Enable this option";
       description "OPTION_ERP_LOCAL_DOMAIN_NAME (65) DHCPv6 ERP Local
         Domain Name Option";
@@ -943,7 +942,7 @@ module ietf-dhcpv6-options {
     }
 
     container option-request-option {
-      if-feature option-request-op;
+    //if-feature option-request-op;
       presence "Enable this option";
       description "OPTION_ORO (6) Option Request Option";
       reference "RFC3315: Dynamic Host Configuration Protocol for
@@ -966,7 +965,7 @@ module ietf-dhcpv6-options {
     }
 
     container user-class-option {
-      if-feature user-class-op;
+    //if-feature user-class-op;
       presence "Enable this option";
       description "OPTION_USER_CLASS (15) User Class Option";
       reference "RFC3315: Dynamic Host Configuration Protocol
@@ -991,7 +990,7 @@ module ietf-dhcpv6-options {
     }
 
     container vendor-class-option {
-      if-feature vendor-class-op;
+    //if-feature vendor-class-op;
       presence "Enable this option";
       description "OPTION_VENDOR_CLASS (16) Vendor Class Option";
       reference "RFC3315: Dynamic Host Configuration Protocol
@@ -1023,7 +1022,7 @@ module ietf-dhcpv6-options {
     }
 
     container client-fqdn-option {
-      if-feature client-fqdn-op;
+    //if-feature client-fqdn-op;
       presence "Enable this option";
       description "OPTION_CLIENT_FQDN (39) The Dynamic Host
         Configuration Protocol for IPv6 (DHCPv6) Client Fully
@@ -1049,7 +1048,7 @@ module ietf-dhcpv6-options {
     }
 
     container client-arch-type-option {
-      if-feature client-arch-type-op;
+    //if-feature client-arch-type-op;
       presence "Enable this option";
       description "OPTION_CLIENT_ARCH_TYPE (61) Client System
         Architecture Type Option";
@@ -1071,7 +1070,7 @@ module ietf-dhcpv6-options {
     }
 
     container client-network-interface-identifier-option {
-      if-feature client-network-interface-identifier-op;
+    //if-feature client-network-interface-identifier-op;
       presence "Enable this option";
       description "OPTION_NII (62) Client Network Interface
         Identifier Option";
@@ -1094,7 +1093,7 @@ module ietf-dhcpv6-options {
     }
 
     container kbr-principal-name-option {
-      if-feature kbr-principal-name-op;
+    //if-feature kbr-principal-name-op;
       presence "Enable this option";
       description "OPTION_KRB_PRINCIPAL_NAME (75) Kerberos
         Principal Name Option";
@@ -1122,7 +1121,7 @@ module ietf-dhcpv6-options {
     }
 
     container kbr-realm-name-option {
-      if-feature kbr-realm-name-op;
+    //if-feature kbr-realm-name-op;
       presence "Enable this option";
       description "OPTION_KRB_REALM_NAME (76) Kerberos Realm Name Option";
       reference "RFC6784: Kerberos Options for DHCPv6";
@@ -1134,7 +1133,7 @@ module ietf-dhcpv6-options {
     }
 
     container client-link-layer-addr-option {
-      if-feature client-link-layer-addr-op;
+    //if-feature client-link-layer-addr-op;
       presence "Enable this option";
       description "OPTION_CLIENT_LINKLAYER_ADDR (79) DHCPv6 Client
         Link-Layer Address Option";
@@ -1161,7 +1160,7 @@ module ietf-dhcpv6-options {
     description "operator customized options";
 
     container operator-option-ipv6-address {
-      if-feature operator-op-ipv6-address;
+    //if-feature operator-op-ipv6-address;
       presence "Enable this option";
       description "operator ipv6 address option";
       reference "RFC7227: Guidelines for Creating New DHCPv6 Options";
@@ -1182,7 +1181,7 @@ module ietf-dhcpv6-options {
     }
 
     container operator-option-single-flag {
-      if-feature operator-op-single-flag;
+    //if-feature operator-op-single-flag;
       presence "Enable this option";
       description "operator single flag";
       reference "RFC7227: Guidelines for Creating New DHCPv6
@@ -1204,7 +1203,7 @@ module ietf-dhcpv6-options {
     }
 
     container operator-option-ipv6-prefix {
-      if-feature operator-op-ipv6-prefix;
+    //if-feature operator-op-ipv6-prefix;
       presence "Enable this option";
       description "operator ipv6 prefix option";
       reference "RFC7227: Guidelines for Creating New DHCPv6
@@ -1231,7 +1230,7 @@ module ietf-dhcpv6-options {
     }
 
     container operator-option-int32 {
-      if-feature operator-op-int32;
+    //if-feature operator-op-int32;
       presence "Enable this option";
       description "operator integer 32 option";
       reference "RFC7227: Guidelines for Creating New DHCPv6
@@ -1253,7 +1252,7 @@ module ietf-dhcpv6-options {
     }
 
     container operator-option-int16 {
-      if-feature operator-op-int16;
+    //if-feature operator-op-int16;
       presence "Enable this option";
       description "operator integer 16 option";
       reference "RFC7227: Guidelines for Creating New DHCPv6
@@ -1275,7 +1274,7 @@ module ietf-dhcpv6-options {
     }
 
     container operator-option-int8 {
-      if-feature operator-op-int8;
+    //if-feature operator-op-int8;
       presence "Enable this option";
       description "operator integer 8 option";
       reference "RFC7227: Guidelines for Creating New DHCPv6
@@ -1297,7 +1296,7 @@ module ietf-dhcpv6-options {
     }
 
     container operator-option-uri {
-      if-feature operator-op-uri;
+    //if-feature operator-op-uri;
       presence "Enable this option";
       description "operator uri option";
       reference "RFC7227: Guidelines for Creating New DHCPv6 Options";
@@ -1318,7 +1317,7 @@ module ietf-dhcpv6-options {
     }
 
     container operator-option-textstring {
-      if-feature operator-op-textstring;
+    //if-feature operator-op-textstring;
       presence "Enable this option";
       description "operator itext string option";
       reference "RFC7227: Guidelines for Creating New DHCPv6 Options";
@@ -1339,7 +1338,7 @@ module ietf-dhcpv6-options {
     }
 
     container operator-option-var-data {
-      if-feature operator-op-var-data;
+    //if-feature operator-op-var-data;
       presence "Enable this option";
       description "operator variable length data option";
       reference "RFC7227: Guidelines for Creating New DHCPv6 Options";
@@ -1360,7 +1359,7 @@ module ietf-dhcpv6-options {
     }
 
     container operator-option-dns-wire {
-      if-feature operator-op-dns-wire;
+    //if-feature operator-op-dns-wire;
       presence "Enable this option";
       description "operator dns wire format domain name list option";
       reference "RFC7227: Guidelines for Creating New DHCPv6
