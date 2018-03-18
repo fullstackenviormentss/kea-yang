@@ -10,9 +10,12 @@
 namespace isc {
 namespace netconf {
 
-TranslatorNetworkRanges::TranslatorNetworkRanges(const std::string& xpath)
-    :Translator(xpath) {
+TranslatorNetworkRanges::TranslatorNetworkRanges(NetconfConneciton& connection,
+        const std::string& xpath)
+    : Translator(connection, xpath) {
+}
 
+TranslatorNetworkRanges::~TranslatorNetworkRanges() {
 }
 
 void TranslatorNetworkRanges::translate() {

@@ -15,17 +15,23 @@
 namespace isc {
 namespace netconf {
 
-    class NetconfAgent : public isc::dhcp::Daemon {
- public:
-      NetconfAgent();
+class NetconfAgent : public isc::dhcp::Daemon {
+public:
+    NetconfAgent();
 
     void init(const std::string& config);
-    
+
     bool run();
 
     void run_one();
-    
+
 private:
+
+    /// @brief setupSysrepo
+    /// Set up a sysrepo connection and create translators.
+    /// Each translator should register to the specific xpath it is responsible
+    /// to handle (config data or state data).
+    bool setupSysrepo();
 
     bool connectSysrepo();
 
@@ -42,7 +48,7 @@ private:
     std::string model_;
 
     //    bool shutdown_;
-
+    NetconfConnection connection_;
 };
 
 };

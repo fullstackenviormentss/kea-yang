@@ -1,7 +1,7 @@
 
 SUBDIRS = . tests
 
-SYSREPO_SRC=/home/thomson/devel/sysrepo
+SYSREPO_SRC=/home/razvanb/work/hackathon/git/sysrepo
 
 NETCONF_INCLUDES=-I$(SYSREPO_SRC)/inc -I$(SYSREPO_SRC)
 NETCONF_LIBS=-L$(SYSREPO_SRC)/build/src -L$(SYSREPO_SRC)/build/swig -lsysrepo -lSysrepo-cpp

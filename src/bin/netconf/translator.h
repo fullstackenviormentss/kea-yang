@@ -11,6 +11,7 @@
 
 #include <cc/data.h>
 #include <boost/shared_ptr.hpp>
+#include <netconf_connection.h>
 
 namespace isc {
 namespace netconf {
@@ -23,7 +24,7 @@ namespace netconf {
 class Translator {
  public:
     // Constructor (requires xpath to install a callback)
-    Translator(const std::string& xpath);
+    Translator(NetconfConnection& connection, const std::string& xpath);
 
     virtual ~Translator();
 
@@ -37,7 +38,7 @@ class Translator {
     // understood by Kea.
     virtual void translate() = 0;
 
-    // Once setYangData is called, 
+    // Once setYangData is called,
     isc::data::ElementPtr getJSON();
 
  protected:
@@ -47,6 +48,8 @@ class Translator {
     void * netconf_data_;
 
     isc::data::ElementPtr json_;
+
+    NetconfConnection& connection_;
 };
 
 typedef boost::shared_ptr<Translator> TranslatorPtr;

@@ -22,34 +22,30 @@ namespace isc {
 namespace netconf {
 
 
-  bool shutdown_;
+static bool done;
 
 static void
-sigint_handler(int signum)
-{
-  cout << "Signal received" << endl;
-  shutdown_ = true;
+sigint_handler(int signum) {
+    cout << "Signal received" << endl;
+    done = true;
 }
 
+NetconfAgent::NetconfAgent()
+    : config_(""), model_() {
+}
 
-  NetconfAgent::NetconfAgent()
-    :config_(""), model_() {
-    
-  };
-  
 void NetconfAgent::init(const std::string& config) {
     // do somthing with the config file.
-  config_ = config;
-  model_ = config;
+    config_ = config;
+    model_ = config;
 }
 
 /* Function to print current configuration state.
  * It does so by loading all the items of a session and printing them out. */
 static void
-print_current_config(S_Session session, const char *module_name)
-{
-  cout << "print_current_config begin" << endl;
-  const int MAX_LEN = 256;
+print_current_config(S_Session session, const char *module_name) {
+    cout << "print_current_config begin" << endl;
+    const int MAX_LEN = 256;
     char select_xpath[MAX_LEN];
     try {
         snprintf(select_xpath, MAX_LEN, "/%s:*//*", module_name);
@@ -77,31 +73,35 @@ class My_Callback:public Callback {
     }
 };
 
-
 bool NetconfAgent::run() {
 
   cout << "### Agent::run()" << endl;
     // Now define all translators. Each will register specific callback.
-    //translators_.push_back(new TranslatorNetworkRanges());
+    // translators_.push_back(new TranslatorNetworkRanges());
 
     // Those will be implemented next.
     // translators_.push_back(new TranslatorOptionSets());
     // translators_.push_back(new TranslatorDuid());
     // translators_.push_back(new TranslatorInterfaces());
 
-    // We need to establish connection to the sysrepo first.
-    if (!connectSysrepo()) {
+    // We need to establish connection and setup the sysrepo first.
+    if (!setupSysrepo()) {
         return (false);
-    }    
+    }
+
+    // We need to establish connection and setup the sysrepo first.
+    if (!setupSysrepo()) {
+        return (false);
+    }
 
     // Second, we need to establish connection to Kea control socket.
     if (!connectControlSocket()) {
         return (false);
     }
 
-    shutdown_ = false;
+    done = false;
 
-    while (!shutdown_) {
+    while (!done) {
         try {
             run_one();
             io_service_.poll();
@@ -121,34 +121,39 @@ void NetconfAgent::run_one() {
 }
 
 bool NetconfAgent::connectSysrepo() {
-  
-  // Connect to sysrepo
-  S_Connection conn(new Connection("kea-netconf"));
+    // Connect to sysrepo
+    S_Connection conn(new Connection("kea-netconf"));
 
-  // Establish session
-  S_Session sess(new Session(conn));
+    // Establish session
+    S_Session sess(new Session(conn));
 
-  cout << "\n\n ========== READING STARTUP CONFIG: ==========\n" << endl;
-  
-  S_Subscribe subscribe(new Subscribe(sess));
-  S_Callback cb(new My_Callback());
-  
-  subscribe->module_change_subscribe(model_.c_str(), cb, nullptr, 0, SR_SUBSCR_DEFAULT | SR_SUBSCR_APPLY_ONLY);
-  
-  print_current_config(sess, model_.c_str());
-  
-  cout << "\n\n ========== STARTUP CONFIG APPLIED AS RUNNING ==========\n" << endl;
+    cout << "\n\n ========== READING STARTUP CONFIG: ==========\n" << endl;
 
+    S_Subscribe subscribe(new Subscribe(sess));
+    S_Callback cb(new My_Callback());
 
-  // Register callbacks for event changes.
-  print_current_config(sess, model_.c_str());
+    subscribe->module_change_subscribe(model_.c_str(), cb, nullptr, 0, SR_SUBSCR_DEFAULT | SR_SUBSCR_APPLY_ONLY);
 
-/* loop until ctrl-c is pressed / SIGINT is received */
- signal(SIGINT, sigint_handler);
- while (!shutdown_) {
-   sleep(1000);  /* or do some more useful work... */
- }
- 
+    print_current_config(sess, model_.c_str());
+
+    cout << "\n\n ========== STARTUP CONFIG APPLIED AS RUNNING ==========\n" << endl;
+
+    // Register callbacks for event changes.
+    print_current_config(sess, model_.c_str());
+
+    /* loop until ctrl-c is pressed / SIGINT is received */
+    signal(SIGINT, sigint_handler);
+    while (!done) {
+        sleep(1000);  /* or do some more useful work... */
+    }
+}
+
+bool NetconfAgent::setupSysrepo() {
+    // Connect to sysrepo
+
+    connection_.connect();
+
+    // Register callbacks for event changes.
 
     // Once implemented, change this to true.
     return (false);
