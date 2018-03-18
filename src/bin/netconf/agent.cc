@@ -35,7 +35,7 @@ NetconfAgent::NetconfAgent()
 }
 
 void NetconfAgent::init(const std::string& config) {
-    // do somthing with the config file.
+    // do something with the config file.
     config_ = config;
     model_ = config;
 }
@@ -61,7 +61,7 @@ print_current_config(S_Session session, const char *module_name) {
     }
 }
 
-class My_Callback:public Callback {
+class My_Callback : public Callback {
     public:
     /* Function to be called for subscribed client of given session whenever configuration changes. */
     int module_change(S_Session sess, const char *module_name, sr_notif_event_t event, void *private_ctx)
@@ -85,14 +85,14 @@ bool NetconfAgent::run() {
     // translators_.push_back(new TranslatorInterfaces());
 
     // We need to establish connection and setup the sysrepo first.
-    if (!setupSysrepo()) {
+    if (!connectSysrepo()) {
         return (false);
     }
 
     // We need to establish connection and setup the sysrepo first.
-    if (!setupSysrepo()) {
-        return (false);
-    }
+    //if (!setupSysrepo()) {
+    //    return (false);
+    //}
 
     // Second, we need to establish connection to Kea control socket.
     if (!connectControlSocket()) {
@@ -127,7 +127,7 @@ bool NetconfAgent::connectSysrepo() {
     // Establish session
     S_Session sess(new Session(conn));
 
-    cout << "\n\n ========== READING STARTUP CONFIG: ==========\n" << endl;
+    cout << "\n\n ========== READING STARTUP CONFIG: ==========\n" << model_.c_str() <<endl;
 
     S_Subscribe subscribe(new Subscribe(sess));
     S_Callback cb(new My_Callback());

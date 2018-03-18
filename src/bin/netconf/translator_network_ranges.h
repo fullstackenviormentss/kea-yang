@@ -18,6 +18,7 @@ class TranslatorNetworkRanges : public Translator {
 public:
     TranslatorNetworkRanges(NetconfConnection& connection, const std::string& xpath);
     virtual ~TranslatorNetworkRanges();
+    static int configChanged();
 };
 
 };
