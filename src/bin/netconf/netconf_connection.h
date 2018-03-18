@@ -26,8 +26,8 @@ public:
     virtual ~NetconfConnection();
     void connect();
 private:
-    sr_conn_ctx_t connection_;
-    sr_session_ctx_t session_;
+    sr_conn_ctx_t* connection_;
+    sr_session_ctx_t* session_;
 };
 
 }  // netconf
