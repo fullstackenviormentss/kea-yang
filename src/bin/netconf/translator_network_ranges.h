@@ -16,11 +16,12 @@ namespace netconf {
 
 class TranslatorNetworkRanges : public Translator {
 public:
-    TranslatorNetworkRanges(NetconfConnection& connection, const std::string& xpath);
+    TranslatorNetworkRanges(NetconfConnection &connection,
+                            const std::string &xpath);
     virtual ~TranslatorNetworkRanges();
 };
 
-};
-};
+}  // namespace netconf
+}  // namespace isc
 
 #endif /* TRANSLATOR_NETWORK_RANGES_H */
